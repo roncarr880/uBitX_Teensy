@@ -5,26 +5,30 @@
  *    Using a Teensy 3.2 for control and USB audio for soundcard modes ( Teensy can appear in Windows as a 16 bit sound card )
  *    
  *    First the ILI9341 will need to be converted to 3.3 volt operation.  Currently all on 5 volts which apparently works but runs hot.
- *      Will move the 7805 to the opposite side of the board without a heatsink. Making room for the Teensy to Nano adapter on top.
- *      The reset line will need to be changed to 3.3 volts on the display.  Might be difficult, may need to clip the pin and run a wire.
- *        or cut a few etches to isolate the pin and run 3.3 volts to the connector.
- *      J1 on the display will need to be open.
- *      Change R1 to 82 or 100 ohms.  Less bright, less heat, less current through the regulator.  Might also be easier to isolate the
- *        pin on the connector, remove R1 and power via resistor on the adaptor board from 5 volts. 
- *      OR depending upon all the etch runs, leave the display as is and feed it with 5 volts through 2 diode drops to run all on 3.3 volts.  
- *        914's have a max of 300 ma.  Diode connected transistors?  Or order the proper part.
- *    
+ *      On the ILI9341 remove the solder jumper at J1.  Install an 82 ohm - 100 ohm resistor from pin 1 ( vcc ) to pin 8 (LED) on top
+ *        of the connector pins.
+ *      On the raduino board remove the 7805.  Cut the etch to pin 4 ( reset ) on the outside of the connector near the edge of the board.
+ *        There is not much room here.  This removes +5 from the reset pin.    Remove the 22 ohm surface mount resistor near pin 8.  This 
+ *        removes the LED pin from +5 volts.  The LED was wired as above and now the etch run from the 22 ohm resistor is on the net 
+ *        for pin 4.  Wire the via or surface mount pad on this etch run to 3.3 volts on the nano socket to put 3.3 volts on the reset pin.
+ *      Install the 7805 without the heatsink on the opposite side from where it was.  Bend the leads at 90 degrees.  Make sure it is   
+ *        installed correctly - the back of the metal tab will be up with the body of the 7805 about covering the via where 3.3 volts was 
+ *        wired.  Have the 7805 a little off the board so it doesn't heat the wire we just put on side 2.
+ *      Mark the board for 3.3 volt operation. The Nano can no longer be used with this Raduino.  Test with a current limiting supply.  
+ *      Power up with no processor, no screen.  Short out the 3.3 volt run to protect the Si5351 in case the 7805 is in backwards.  
+ *      It should draw about ______ ma.  Test that the 5 volt net has 5 volts.  
+ *            
  *    The DAC pin will do triple duty, sound to speaker, sound to microphone in for digital modes, AGC and ALC control.
  *      Audio down to the main board via the sidetone pin.  Circuit mods needed and some trim pots for levels.
  *      For digital modes turn the volume control down so you don't hear the transmit tones.
  *      For digital modes will need to remove the microphone from the jack or will tx room noise. 
- *    Will need a jumper to the main board to pick up audio for A2 analog input.  ( or steal a ground pin on the connector )
+ *    Will need a jumper to the main board to pick up audio for A2 analog input. May need an op-amp to increase the signal level.
  *      
  *    RX audio read via A2 AC coupled, processed and output via the Teensy DAC pin.  Using Teensy Audio Library.
  *    12 or 13 usable bits out of 16 bits sampled, will need some form of AGC to keep the A/D in range.
  *      
  *    For CW mode
- *      Can control power out via the ALC/AGC attenuator in the audio line to/from the last mixer.
+ *      Can control power out via the to be installed ALC/AGC attenuator in the audio line to/from the last mixer.
  *      Perhaps can control CW power also via the Si5351 drive ( 2ma, 4ma, 6ma, 8ma ).
  *      Sidetone keyed with the keyer, actual transmit always behind by the relay on delay time( 20 ms or maybe shorter is ok ).
  *         So no short dits or dahs when first key up.
@@ -76,7 +80,7 @@
  *        
  *      DSP bandwidth filters for CW. Notch, de-noise possible.  AM would be difficult with the narrow filter, could try it. 
  *      
- *      Can we mount the finals differently, on some thin wood maybe?  Computer fan for cooling?
+ *      Can we mount the finals differently, on some thin wood maybe?  CPU computer fan for cooling?
  *        
  */
 
