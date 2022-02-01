@@ -74,12 +74,10 @@
  *          Or would need to use I2C to tell ATU to set the relays. 
  *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
  *      
- *      User interface. 
- *      Use the Touch screen or not?  Thinking touch paddles could work as buttons when not in CW mode.  Easier than pushing the encoder.  
- *        Dit Dah touch menu:  Dit or encoder brings up menu, Dah or encoder scrolls selections, Dit or encoder makes a selection and exits.
+ *      User interface.
  *      Use vfo A,B.  A is always the receive vfo, B is always the transmit vfo.  Update both when tuning in non-split mode.
  *        Auto split on transmit?  ( auto RIT ) Can't knock tx off freq and can tune rx at will.
- *      Touch could be modeled after my 40 meter QCX-Teensy.  Thinking will go with touch menu's instead of paddles as input.
+ *      Touch could be modeled after my 40 meter QCX-Teensy.
  *        
  *      Display: use the LED fonts for main tuning display or play with an analog simulation.  
  *        Can display audio scope view or audio FFT
@@ -130,7 +128,7 @@
 #define TAP  4
 #define DTAP 5
 #define LONGPRESS 6
-#define DBOUNCE 50     // 60
+#define DBOUNCE 50
 
 
 
@@ -141,7 +139,9 @@
 #include <i2c_t3.h>            // non-blocking wire library
 #include <SPI.h>
 #include "led_fonts.h"
-// #include "ubitx_si5351.cpp"
+
+#define BFO 11059590L          // !!! must match number in ubitx_si5351, for now defined in two separate places
+#define IF  45000000L          // what is the actual center if the IF?
 
          //  4bpp pallett  0-3, 4-7, 8-11, 12-15
 const uint16_t EGA[] = { 
@@ -232,7 +232,7 @@ struct menu band_menu_data = {
   { 0,2,3,4,5,6,7,8 },                                     // 60 meters in a submenu
   48,
   EGA[1],
-  1
+  2
 };
 
 const char c_1[] = " Ch 1";
@@ -277,11 +277,11 @@ struct BAND_STACK band_stack[9] = {
 #define MENUS    2
 uint8_t  screen_owner = DECODE;
 
-
-
-
 extern void initOscillators();
 extern void si5351bx_setfreq(uint8_t clknum, uint32_t fout);
+
+/*****************************************************************************************/
+
 
 void setup() {
 
@@ -313,15 +313,21 @@ void setup() {
   ts.begin();                               // touchscreen
   ts.setRotation(3);                        // ? should have been 1, same as print rotation
   
-  tft.setTextSize(2);                       // sign on message, else see a blank screen until qcx boots.
+  tft.setTextSize(2);                       // sign on message
   tft.setTextColor(ILI9341_WHITE);          // or foreground/background for non-transparent text
   tft.setCursor(10,200);
   tft.print("K1URC uBitX w/ Teensy 3.2");   // about 25 characters per line with text size 2
+  tft.setTextColor(ILI9341_CYAN);          // or foreground/background for non-transparent text
+  tft.setTextSize(1);
+  tft.setCursor(5,230);     tft.print("Mic");
+  tft.setCursor(150,230);     tft.print("Spkr");
+  tft.setCursor(319-24,230);     tft.print("Key");
 
   Wire.begin();
   initOscillators();                        // sets bfo
 //  si5351bx_setfreq( 1, 33948600 );          // set LSB mode
-  si5351bx_setfreq( 1, 56061400 );          // set LSB mode
+//  si5351bx_setfreq( 1, 56061400 );          // set LSB mode
+  si5351bx_setfreq( 1, IF + BFO );     // set LSB mode
 
  // vfo_freq_disp();
  // vfo_mode_disp();
@@ -360,6 +366,8 @@ int t2;
 
 
 void band_change( int to_band ){
+int val;
+
    band_stack[band].vfoa = vfo_a;
    band_stack[band].vfob = vfo_b;
    band_stack[band].mode = vfo_mode;
@@ -369,7 +377,16 @@ void band_change( int to_band ){
    vfo_mode = band_stack[band].mode;
    set_relay( band_stack[band].relay );
    vfo_freq_disp();
-   vfo_mode_disp();  
+   vfo_mode_disp();
+
+   // update the mode data struct as we just changed vfo_mode with the band change
+   if( vfo_mode & VFO_CW ) val = 3;
+   if( vfo_mode & VFO_USB ) val = 4;
+   if( vfo_mode & VFO_LSB ) val = 5;
+   if( vfo_mode & VFO_AM ) val = 6;
+   if( vfo_mode & VFO_DIGI ) val = 7;
+   mode_menu_data.current = val;
+   
 }
 
 void set_relay( int num ){
@@ -400,7 +417,7 @@ int32_t  yt, xt;
    
    // check the y value of touch to see what menu area
    if( yt < 50 ){
-      menu_display( &mode_menu_data,3 );
+      menu_display( &mode_menu_data,3 );     // pass the mode hack value 3
       menu_dispatch = &mode_menu;            // screen touch goes to mode_menu() now
    }
    else if ( yt < 110 ){ 
@@ -432,8 +449,8 @@ int selection;                                // pick the 80 meter filter
       vfo_mode = VFO_A+VFO_USB;
       set_relay( band_stack[1].relay );
   }
-  vfo_freq_disp();
-  vfo_mode_disp();
+ // vfo_freq_disp();     redundant with cleanup
+ // vfo_mode_disp();
   menu_cleanup();
 }
 
@@ -455,7 +472,8 @@ void mode_menu( int32_t t ){
 int selection;
 int current;
 
-   current = mode_menu_data.current;                         // current is usb,cw,lsb etc.  vfo modes not highlighted in the menu
+   current = mode_menu_data.current;                         // current is usb,cw,lsb etc.
+                                                            
    selection = touch_decode( t, mode_menu_data.y_size );
    if( selection == -1 ){                                    // title was touched
       menu_cleanup();
@@ -588,8 +606,8 @@ int32_t x,y;
    if( y < 0 ) return -1;                     // title area was touched
    y /= y_size;                               // row of the touch
    x /= 160;                                  // column
- Serial.print( "X " );  Serial.print(x); Serial.print(" Y "); Serial.println(y);   
-   return 2*y + x; // two menu items per row
+   //Serial.print( "X " );  Serial.print(x); Serial.print(" Y "); Serial.println(y);   
+   return 2*y + x;                            // two menu items per row
    
 }
 
@@ -711,7 +729,7 @@ static int rc;
 
   if( fast_tune ) count *= 1000;
   else{
-     if( rpm > 20 /* || (vfo_mode & VFO_CW) == 0 */) count *= 10;
+     if( rpm > 20  || (vfo_mode & VFO_CW) == 0 ) count *= 10;       // only cw mode counts by 1 hz
      if( rpm > 50 ) count *= 10;
   }
 
@@ -743,22 +761,16 @@ int ca,cb;         // colors
 
    cb = 4;         // unused vfo color in EGA pallet
    ca = 6;         // was 2 or 4
-//   if( screen_owner != DECODE ) return;
+
    if( vfo_mode & VFO_B ) vfo = vfo_b, cb = 10;
    else vfo = vfo_a, ca = 10;       // was 10
 
    if( vfo_mode & VFO_SPLIT ) cb = 12;    // vfo b is active transmit
 
-   si5351bx_setfreq(2, vfo + 45005000);           // !!! not a good spot for this? but we do know which vfo is in use here
+   si5351bx_setfreq(2, vfo + IF);           // !!! not a good spot for this? but we do know which vfo is in use here
 
-   // qcx reports vfo 700 hz higher than actual as it is a CW receiver
-   // remove that offset for AM, USB, LSB modes.  Add subtract BFO freq.
- //  if( (vfo_mode & VFO_AM ) == VFO_AM ) vfo += 12000;   // AM IF is 12.7 
- //  else if( ( vfo_mode & VFO_CW ) == 0 ) vfo -= 700;    // not CW, remove offset.
- //  if( (vfo_mode & VFO_USB ) ) vfo -= BFO_FREQ;
- //  if( (vfo_mode & VFO_LSB ) ) vfo += BFO_FREQ;
- //  if( (vfo_mode & VFO_CW ) &&  mode_menu_data.current == 1) vfo -= BFO_FREQ;   // SDR CW mode
-
+   if( screen_owner != DECODE ) return;
+                          
 
    if( ca == 10 ) disp_vfo( vfo, 20, ca );
    else disp_vfo(vfo_a,20,ca);
@@ -859,8 +871,9 @@ void vfo_mode_disp(){
 int a,b,s,r;
 int u,l,c,m;
 int row = 6;                                // was 2
+int32_t as;
 
- //  if( screen_owner != DECODE ) return;
+   as = -1;                                 // add/sub sign for LSB/USB.  add/sub from 1st IF freq.  Set up for USB.
    a = b = s = r = 0;                       // set colors of the vfo mode
    c = u = l = m = 0;
    
@@ -868,11 +881,19 @@ int row = 6;                                // was 2
    if( vfo_mode & VFO_A ) a = 10;
    if( vfo_mode & VFO_SPLIT ) s = 10;
    if( vfo_mode & VFO_DIGI ) r = 10;
-   if( vfo_mode & VFO_CW ) c = 10;
-   if( vfo_mode & VFO_LSB ) l = 10;
+   if( vfo_mode & VFO_CW ) c = 10, as = 1;       // CW on LSB
+   if( vfo_mode & VFO_LSB ) l = 10, as = 1;      // LSB on LSB
    if( vfo_mode & VFO_USB ) u = 10;
-   if( vfo_mode & VFO_AM )  m = 10;
-   
+   if( vfo_mode & VFO_AM )  m = 10;              // AM through the filter on USB, tune 3 k off frequency down, 
+                                                 // get carrier at 3k audio + lower sideband for the decoder.  Will this work?
+
+   si5351bx_setfreq( 1, IF + as*BFO );           // !!! not sure I like having radio setups in the display code but currently it is the 
+                                                 // common place where all code branches merge.  Also we know what the mode is here.
+                                                 // what is the actual center of the 1st IF freq?  Notes say it is low due to loading but
+                                                 // the standard code sets it at 45005000
+                                                 
+   if( screen_owner != DECODE ) return;          // make sure screen owner is changed before this call when exiting menu's
+
    tft.setTextSize(1);
    tft.setTextColor(EGA[4+a],0);
    tft.setCursor(15,row);
@@ -906,8 +927,8 @@ int row = 6;                                // was 2
    tft.setTextColor(EGA[4+r],0);
    tft.print("DIGI");
     
-   tft.drawLine(0,64,319,64,EGA[4]);      
-   tft.drawLine(0,65,319,65,EGA[4]);
+   tft.drawLine(0,69,319,69,EGA[4]);                 // 64
+   tft.drawLine(0,70,319,70,EGA[4]);
 //   if( decode_menu_data.current != DHELL ){
 //      tft.drawLine(0,128,319,128,EGA[4]);
 //      tft.drawLine(0,129,319,129,EGA[4]);
