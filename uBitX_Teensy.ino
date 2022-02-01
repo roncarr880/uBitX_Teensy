@@ -141,6 +141,7 @@
 #include <i2c_t3.h>            // non-blocking wire library
 #include <SPI.h>
 #include "led_fonts.h"
+// #include "ubitx_si5351.cpp"
 
          //  4bpp pallett  0-3, 4-7, 8-11, 12-15
 const uint16_t EGA[] = { 
@@ -163,7 +164,7 @@ XPT2046_Touchscreen ts(8);
 //   Can listen on VFO B, if selected split is also selected.  If transmit, listen vfo returns to VFO A.
 //   VFO B follows VFO A unless split is enabled.
 //   B --> A exit split with VFO B selected.   A --> B exit spit with VFO A selected.
-//  ? encoder switch  tap = enable split A selected (RIT), double tap enable split vfo B selected, long press B to A or A to B as above.
+//  encoder switch  tap = enable split A selected (RIT), tap then toogles B or A vfo, long press B to A or A to B as above.
 
 // radio defines for vfo_mode.
 #define VFO_A  1
@@ -175,13 +176,112 @@ XPT2046_Touchscreen ts(8);
 #define VFO_USB   64
 #define VFO_AM   128
 
-//  radio variables
-int32_t  vfo_a = 7255000, vfo_b = 18100000;
+//  radio variables, set reasonable for 1st band change
+//  can start a different band in setup, but will save this data to the 40 meter band_stack
+//  ECARS usually has some activity to listen to
+int32_t  vfo_a = 7255000, vfo_b = 7055000;
 uint8_t  vfo_mode = VFO_A + VFO_LSB;
+int band = 2;                          // 40 meters
 
 uint8_t  fast_tune;
 
+//   Touch menu's
+void (* menu_dispatch )( int32_t );    // pointer to function that is processing screen touches
 
+struct menu {
+   char title[16];
+   const char *menu_item[8];    // array of pointers to strings
+   int param[8];
+   int y_size;                  // x size will be half the screen, two items on a line for now
+   int color;
+   int current;
+};
+
+// mode menu items
+const char m_vfoa[]  = " VFO A";
+const char m_vfob[]  = " VFO B";
+const char m_split[] = " Split";
+const char m_cw[]    =  " CW";
+const char m_usb[]   = " USB";
+const char m_lsb[]   = " LSB";
+const char m_am[]    = " AM";
+const char m_digi[]  = " DIGI";
+
+struct menu mode_menu_data = {
+   { "   VFO Mode" },
+   { m_vfoa,m_vfob,m_split,m_cw,m_usb,m_lsb,m_am,m_digi },
+   {0,1,2,3,4,5,6,7},
+   48,
+   EGA[1],
+   5
+};
+
+// band menu
+const char b_80[] = " 80m";
+const char b_40[] = " 40m";
+const char b_30[] = " 30m";
+const char b_20[] = " 20m";
+const char b_17[] = " 17m";
+const char b_15[] = " 15m";
+const char b_12[] = " 12m";
+const char b_10[] = " 10m";
+
+struct menu band_menu_data = {
+  { " BAND  (60m)" },
+  { b_80, b_40, b_30, b_20, b_17, b_15, b_12, b_10 },
+  { 0,2,3,4,5,6,7,8 },                                     // 60 meters in a submenu
+  48,
+  EGA[1],
+  1
+};
+
+const char c_1[] = " Ch 1";
+const char c_2[] = " Ch 2";
+const char c_3[] = " Ch 3";
+const char c_4[] = " Ch 4";
+const char c_5[] = " Ch 5";
+
+struct menu band_60_menu_data = {
+  { "  Channel" },
+  {  c_1, c_2, c_3, c_4, c_5 },
+  { 5330500, 5346500, 5357000, 5371500, 5403500, -1, -1, -1 },
+  48,
+  EGA[2],
+  2
+};
+
+struct BAND_STACK {
+  uint32_t  vfoa;
+  uint32_t  vfob;
+  uint8_t   mode;
+  uint8_t   relay;
+};
+
+struct BAND_STACK band_stack[9] = {
+  {  3928000,  3928000, VFO_A+VFO_LSB, 4 },      // relay C  for 80 and 60 meters
+  {  6000000,  6000000, VFO_A+VFO_USB, 4 },
+  {  7168000,  7176000, VFO_A+VFO_LSB, 2 },      // relay B
+  { 10106000, 10140000, VFO_A+VFO_USB, 2 },
+  { 14200000, 14076000, VFO_A+VFO_USB, 1 },      // relay A
+  { 18100000, 18200000, VFO_A+VFO_DIGI, 1 },
+  { 21100000, 21100000, VFO_A+VFO_CW, 0 },       // default lowpass
+  { 24900000, 24900000, VFO_A+VFO_USB, 0 },
+  { 28250000, 28250000, VFO_A+VFO_USB, 0 }
+};
+
+
+
+// screen owners
+#define DECODE 0
+#define KEYBOARD 1
+#define MENUS    2
+uint8_t  screen_owner = DECODE;
+
+
+
+
+extern void initOscillators();
+extern void si5351bx_setfreq(uint8_t clknum, uint32_t fout);
 
 void setup() {
 
@@ -191,7 +291,7 @@ void setup() {
   pinMode( LP_C, OUTPUT);
   pinMode( CW_KEY, OUTPUT);
   digitalWriteFast( TR, LOW );
-  digitalWriteFast( LP_A, LOW );         // LP relays should be set up for the starting band
+  digitalWriteFast( LP_A, LOW );         // !!! LP relays should be set up for the starting band
   digitalWriteFast( LP_B, LOW );         // they don't switch on until TR goes high
   digitalWriteFast( LP_C, LOW );
   digitalWriteFast( CW_KEY, LOW );
@@ -211,15 +311,24 @@ void setup() {
   tft.setRotation(1);
   
   ts.begin();                               // touchscreen
-  ts.setRotation(1);
+  ts.setRotation(3);                        // ? should have been 1, same as print rotation
   
   tft.setTextSize(2);                       // sign on message, else see a blank screen until qcx boots.
   tft.setTextColor(ILI9341_WHITE);          // or foreground/background for non-transparent text
   tft.setCursor(10,200);
   tft.print("K1URC uBitX w/ Teensy 3.2");   // about 25 characters per line with text size 2
 
-  vfo_freq_disp();
-  vfo_mode_disp();
+  Wire.begin();
+  initOscillators();                        // sets bfo
+//  si5351bx_setfreq( 1, 33948600 );          // set LSB mode
+  si5351bx_setfreq( 1, 56061400 );          // set LSB mode
+
+ // vfo_freq_disp();
+ // vfo_mode_disp();
+ // set_relay( band_stack[band].relay );
+  band_change(2);
+  
+  menu_dispatch = &hidden_menu;             // function pointer for screen touch
 
 }
 
@@ -232,6 +341,10 @@ int t2;
    t2 = encoder();
    freq_update( t2 );                    // will have encoder users eventually
 
+   t = touch();
+   if( t ) (*menu_dispatch)(t);        // off to whoever owns the touchscreen
+
+
    //  One ms processing
    t = millis() - tm;
    tm += t;
@@ -242,10 +355,244 @@ int t2;
       if( t2 > DONE ) button_process(t2);
 
    }
-
-  
-
+   
 }
+
+
+void band_change( int to_band ){
+   band_stack[band].vfoa = vfo_a;
+   band_stack[band].vfob = vfo_b;
+   band_stack[band].mode = vfo_mode;
+   band = to_band;
+   vfo_a = band_stack[band].vfoa;
+   vfo_b = band_stack[band].vfob;
+   vfo_mode = band_stack[band].mode;
+   set_relay( band_stack[band].relay );
+   vfo_freq_disp();
+   vfo_mode_disp();  
+}
+
+void set_relay( int num ){
+
+   digitalWriteFast( LP_A, LOW );             // clear relays
+   digitalWriteFast( LP_B, LOW );
+   digitalWriteFast( LP_C, LOW );
+
+   if( num & 1 ) digitalWriteFast( LP_A, HIGH );
+   if( num & 2 ) digitalWriteFast( LP_B, HIGH );
+   if( num & 4 ) digitalWriteFast( LP_C, HIGH );
+}
+
+
+
+// touch the screen top,middle,bottom to bring up different menus.  Assign menu_dispatch.
+// This is default touch processing.   No menu on the screen.
+void hidden_menu( int32_t t ){
+int32_t  yt, xt;
+
+
+   screen_owner = MENUS;
+   yt = t & 0xff;
+   xt = t >> 8;
+
+   // Serial.print("X ");  Serial.print(xt);  Serial.print(" Y "); Serial.println(yt);
+   // touch rotation is different than the print rotation on this ILI9341
+   
+   // check the y value of touch to see what menu area
+   if( yt < 50 ){
+      menu_display( &mode_menu_data,3 );
+      menu_dispatch = &mode_menu;            // screen touch goes to mode_menu() now
+   }
+   else if ( yt < 110 ){ 
+      menu_display( &band_menu_data,0 );
+      menu_dispatch = &band_menu;
+   }
+   /*
+   else if( yt > 190 && xt > 270 && (vfo_mode & VFO_CW) ){  // keyboard CW sending
+      menu_dispatch = &key_tx;
+      key_tx(0);
+   }
+   else if( yt > 140 ){
+      menu_display( &decode_menu_data );
+      menu_dispatch = &decode_menu;
+   }
+   */
+                           
+   else menu_cleanup();                  // not active part of the screen, return to normal op.
+}
+
+
+void band_60_menu( int32_t t ){               // setup for 60 meters
+int selection;                                // pick the 80 meter filter
+
+  selection = touch_decode( t, band_60_menu_data.y_size );
+  if( selection != -1 ){
+      band_change(1);
+      vfo_a = vfo_b = band_60_menu_data.param[selection];
+      vfo_mode = VFO_A+VFO_USB;
+      set_relay( band_stack[1].relay );
+  }
+  vfo_freq_disp();
+  vfo_mode_disp();
+  menu_cleanup();
+}
+
+void band_menu( int32_t t ){
+int selection;
+
+   selection = touch_decode( t, band_menu_data.y_size );   //  expand for 60 meters submenu
+   if( selection == -1 ){
+      menu_display( &band_60_menu_data,0 );                // sub menu
+      menu_dispatch = &band_60_menu;
+      return;   
+   }
+   band_menu_data.current = selection;                     // 60 meters sub menu will leave stale data here
+   band_change( band_menu_data.param[selection] );
+   menu_cleanup(); 
+}
+
+void mode_menu( int32_t t ){
+int selection;
+int current;
+
+   current = mode_menu_data.current;                         // current is usb,cw,lsb etc.  vfo modes not highlighted in the menu
+   selection = touch_decode( t, mode_menu_data.y_size );
+   if( selection == -1 ){                                    // title was touched
+      menu_cleanup();
+      return;
+   }
+   if( mode_menu_data.param[selection] != -1 ){
+      if( selection > 2 ) mode_menu_data.current = selection;
+      selection = mode_menu_data.param[selection];
+
+      switch( selection ){
+        case 0:                                           // vfo A selected
+                 vfo_mode |= VFO_A;
+                 vfo_mode &= ( 0xff ^ VFO_B );
+               
+        break;
+        case 1:  vfo_mode |= VFO_B + VFO_SPLIT;           // vfo B also implies split mode 
+                 vfo_mode &= ( 0xff ^ VFO_A );
+        break;
+        case 2:  vfo_mode ^= VFO_SPLIT;                   // toggle split.  Split can also be enabled / disabled with encoder switch
+                 if( (vfo_mode & VFO_SPLIT) == 0 ){       // if toggled off then assign vfo a --> b or b--> a
+                    if( vfo_mode & VFO_A ) vfo_b = vfo_a;
+                    else vfo_a = vfo_b;
+                    vfo_mode |= VFO_A;                    // leaving split always returns to standard vfo A operation
+                    vfo_mode &= ( 0xff ^ VFO_B );
+                 }
+        break;
+        case 3:  vfo_mode &= 0x7;                         // clear all modes, save vfo, split
+                 vfo_mode |= VFO_CW;                      // set cw mode
+        break;
+        case 4:  vfo_mode &= 0x7;
+                 vfo_mode |= VFO_USB;
+        break;
+        case 5:  vfo_mode &= 0x7;
+                 vfo_mode |= VFO_LSB;
+        break;         
+        case 6:  vfo_mode &= 0x7;
+                 vfo_mode |= VFO_AM;   
+        break;  
+        case 7:  vfo_mode &= 0x7;
+                 vfo_mode |= VFO_DIGI; 
+        break;    
+      }
+     
+   //qsy_mode( current, mode_menu_data.current );   
+   }
+   
+   menu_cleanup(); 
+}
+
+void menu_cleanup(){
+
+   // exit touch menu and back to normal screen
+   menu_dispatch = &hidden_menu;
+   tft.fillScreen(ILI9341_BLACK);
+   screen_owner = DECODE;
+   vfo_mode_disp();
+   vfo_freq_disp();
+}
+
+uint32_t touch(){
+static uint32_t  tm;
+static int16_t  x,y;
+static uint8_t   z;
+
+   // control rate of updates,  library is at 3 ms.
+   if( millis() - tm < 5 ) return 0;
+   tm = millis();
+
+   if( ts.touched() ){
+     ++z;
+     TS_Point p = ts.getPoint();
+     //ts.readData(&x,&y,&z);
+     x += map( p.x, 250, 3650, 0, 320 );
+     y += map( p.y, 330, 3700, 0, 240 );
+     //x = p.x;  y = p.y;
+   }
+   else z = 0;
+   if( z == 0 ) x = y = 0;
+
+   if( z == 4 ){
+     x >>= 2;
+     y >>= 2;
+     return ( x << 8 ) | y;
+   }
+   return 0;
+}
+
+void menu_display( struct menu *m, int mode_hack ){    // display any of the menus on the screen, special highlighting for the mode menu
+int i,x,y;                                         // other functions handle selections
+char buf[20];
+
+   tft.setTextColor( ILI9341_WHITE, m->color );  // text is white on background color 
+   tft.fillScreen(ILI9341_BLACK);                // border of menu items is black
+
+   // title box
+   tft.fillRect(5,5,320-10,m->y_size-10,m->color);
+   tft.setCursor( 10,10 );
+   if( m->y_size > 45 ) tft.setTextSize(3);
+   else tft.setTextSize(2);
+   tft.print(m->title);
+   
+   // draw some menu boxes, two per row for now
+   y = m->y_size; x = 0;
+   for( i = 0; i < 8; ++i ){
+      if( m->menu_item[i][0] == 0 ) break;       // null option
+      if( y + m->y_size-10  > 239 ) break;       // screen is full
+      tft.fillRect(x+5,y+5,160-10,m->y_size-10,m->color);
+      tft.setCursor( x+10,y+10 );
+      if( i == m->current ) tft.setTextColor( ILI9341_YELLOW, m->color );
+      else if( i < mode_hack ){                                             // special highlighting of vfo mode, split
+          if( i == 0 && (vfo_mode & VFO_A) ) tft.setTextColor( ILI9341_YELLOW, m->color );
+          else if( i == 1 && (vfo_mode & VFO_B) ) tft.setTextColor( ILI9341_YELLOW, m->color );
+          else if( i == 2 && (vfo_mode & VFO_SPLIT) ) tft.setTextColor( ILI9341_YELLOW, m->color );
+          else tft.setTextColor( ILI9341_WHITE, m->color );
+      }
+      else tft.setTextColor( ILI9341_WHITE, m->color );
+      strncpy(buf,m->menu_item[i],12);    buf[12] = 0;
+      tft.print(buf);
+      x += 160;
+      if( x >= 320 ) x = 0, y += m->y_size;
+   }
+}
+
+int touch_decode( int32_t t, int y_size ){    // selection for 2 items wide touch menu
+int32_t x,y;
+
+   y = t & 0xff;
+   x = t >> 8;
+   y -= y_size;                               // top row is the title. if sub menus needed, need to decode title touch also
+   if( y < 0 ) return -1;                     // title area was touched
+   y /= y_size;                               // row of the touch
+   x /= 160;                                  // column
+ Serial.print( "X " );  Serial.print(x); Serial.print(" Y "); Serial.println(y);   
+   return 2*y + x; // two menu items per row
+   
+}
+
 
 
 void button_process( int val ){
@@ -401,6 +748,8 @@ int ca,cb;         // colors
    else vfo = vfo_a, ca = 10;       // was 10
 
    if( vfo_mode & VFO_SPLIT ) cb = 12;    // vfo b is active transmit
+
+   si5351bx_setfreq(2, vfo + 45005000);           // !!! not a good spot for this? but we do know which vfo is in use here
 
    // qcx reports vfo 700 hz higher than actual as it is a CW receiver
    // remove that offset for AM, USB, LSB modes.  Add subtract BFO freq.
