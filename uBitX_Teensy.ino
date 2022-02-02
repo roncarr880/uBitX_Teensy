@@ -20,6 +20,9 @@
  *      the Si5351 in case the 7805 is in backwards.  It should draw about 3 ma.  Test that the 5 volt net has 5 volts.  Insert the screen 
  *      and power up.  It should draw about 60 ma on the depleted battery and the screen should light.
  *            
+ *            
+ * A plan outline:           
+ * 
  *    The DAC pin will do double or triple duty, sound to speaker, sound to microphone in for digital modes, AGC and ALC control.
  *      Audio down to the main board via the sidetone pin.  Circuit mods needed and some trim pots for levels.
  *      For digital modes turn the volume control down so you don't hear the transmit tones.
@@ -57,14 +60,6 @@
  *      
  *    Will break out the VFO from this scheme so that it uses the unused PLL and even dividers for maybe lower jitter.
  *      Maybe can run a divider of 12.  900/12 = 75.  600/12 = 50.  48*12 = 575 - so 80 meters runs PLL slightly out of spec.
- *      Maybe can use the R dividers to put the CW transmit signal where we want for each band.
- *        691.2/12/16 =  3.6 meg
- *        681.6/12/8  =  7.1 meg
- *          30 meters ?
- *        676.8/12/4  = 14.1 meg
- *          15 meters ?
- *        674.4/12/2  = 28.1 meg
- *      This doesn't seem to be a good idea.  So just change the divider to something other than 12 for CW transmit and reset the PLL. 
  *      
  *      ATU board.   An ATU-100 mini clone from uSDX SOTA radio.
  *        Probably will want to run the I2C through a level converter and run the PIC on the ATU at 5 volts.   
@@ -73,20 +68,12 @@
  *        Maybe can separate 5 volt runs so the PIC can run with the relays off, relays only on during TX like the rest of the radio.
  *          Or would need to use I2C to tell ATU to set the relays. 
  *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
- *      
- *      User interface.
- *      Use vfo A,B.  A is always the receive vfo, B is always the transmit vfo.  Update both when tuning in non-split mode.
- *        Auto split on transmit?  ( auto RIT ) Can't knock tx off freq and can tune rx at will.
- *      Touch could be modeled after my 40 meter QCX-Teensy.
- *        
- *      Display: use the LED fonts for main tuning display or play with an analog simulation.  
- *        Can display audio scope view or audio FFT
- *        Can decode CW, Hellschrieber, etc.
  *                
  *      DSP bandwidth filters for CW. Notch, de-noise possible.  Try AM decoder with Carrier on high side of the filter.
  *        Could use a high Q lowpass to enhance the carrier on the edge of the filter.
  *      
  *      Mount the finals differently, on some thin wood maybe?
+ *      Need to rotate the speaker away from the Teensy/ATU?  Top cover 1/4 inch higher may be needed for the ATU.
  *        
  *      Construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
  *        Use the Teensy audio shield.  Ordered a Softrock with K2 IF, about 4.914 mhz.  Can receive using the IQ DSP and transmit using 
@@ -95,6 +82,28 @@
  *          Or can route I Q audio to a jack and control the radio with a remote head via CAT control. ( usb host mode ? ).
  *          Bigger screen, speaker, audio amp, etc.  Guess would need audio cables with this idea. 
  */
+
+/*  Change log.   The above discussion is a loose plan, some things will be implemented some not.
+ *   
+ *      Implemented basic control of the receiving functions, mode, band switching.
+ *      Added 160 meters to the band stack.  Can listen there, would need an external filter to try transmitting.
+ *      Added a USA license class indicator to show when in a ham band and what class license is needed to transmit.
+ *        Did not implement for 160 meters.
+ *      
+ *      
+ *  To do.    
+ *      Finish my last project.
+ *      Test TX.
+ *      Audio design using the Teensy Audio tool. Maybe start with just input to output to get signal levels correct.
+ *      Change VFO to use PLLB and even divider.
+ *      CW keyer.  ( wait for circuit changes as going to use digital pins ).  CW sequencer.  Try CW power levels idea.
+ *      Measure signal level and see if we need more or less signal for the Teensy A/D. DAC will need attenuation.  Convert to DSP audio.
+ *        Think about a FET to gate the standard audio through. Could then do A/B comparison. Might be useful for very weak signals. 
+ *      CW decoder.   Hell decoder.
+ *      Audio scope, audio FFT displays.
+ *      Work with the ATU.  Mounting, add inductors, firmware. Kind of a separate project. 
+ *      Some pictures for documentation.
+*/         
 
 
 // Wiring  ( not easy with Nano upside down )  Teensy mounted with USB on the other side for the shortest wiring to the display.
@@ -179,9 +188,9 @@ XPT2046_Touchscreen ts(8);
 //  radio variables, set reasonable for 1st band change
 //  can start a different band in setup, but will save this data to the 40 meter band_stack
 //  ECARS usually has some activity to listen to
-int32_t  vfo_a = 7255000, vfo_b = 7055000;
+int32_t  vfo_a = 7255000, vfo_b = 7255000;
 uint8_t  vfo_mode = VFO_A + VFO_LSB;
-int band = 2;                          // 40 meters
+int band = 3;                          // 40 meters
 
 uint8_t  fast_tune;
 
@@ -190,8 +199,8 @@ void (* menu_dispatch )( int32_t );    // pointer to function that is processing
 
 struct menu {
    char title[16];
-   const char *menu_item[8];    // array of pointers to strings
-   int param[8];
+   const char *menu_item[9];    // array of pointers to strings
+   int param[9];
    int y_size;                  // x size will be half the screen, two items on a line for now
    int color;
    int current;
@@ -210,13 +219,14 @@ const char m_digi[]  = " DIGI";
 struct menu mode_menu_data = {
    { "   VFO Mode" },
    { m_vfoa,m_vfob,m_split,m_cw,m_usb,m_lsb,m_am,m_digi },
-   {0,1,2,3,4,5,6,7},
+   {0,1,2,3,4,5,6,7,-1},
    48,
    EGA[1],
    5
 };
 
 // band menu
+const char b_160[] = " 160m rx";
 const char b_80[] = " 80m";
 const char b_40[] = " 40m";
 const char b_30[] = " 30m";
@@ -228,11 +238,11 @@ const char b_10[] = " 10m";
 
 struct menu band_menu_data = {
   { " BAND  (60m)" },
-  { b_80, b_40, b_30, b_20, b_17, b_15, b_12, b_10 },
-  { 0,2,3,4,5,6,7,8 },                                     // 60 meters in a submenu
-  48,
+  { b_160, b_80, b_40, b_30, b_20, b_17, b_15, b_12, b_10 },
+  { 0,1,3,4,5,6,7,8,9 },                                     // 60 meters in a submenu
+  40,
   EGA[1],
-  2
+  3
 };
 
 const char c_1[] = " Ch 1";
@@ -244,7 +254,7 @@ const char c_5[] = " Ch 5";
 struct menu band_60_menu_data = {
   { "  Channel" },
   {  c_1, c_2, c_3, c_4, c_5 },
-  { 5330500, 5346500, 5357000, 5371500, 5403500, -1, -1, -1 },
+  { 5330500, 5346500, 5357000, 5371500, 5403500, -1, -1, -1, -1 },
   48,
   EGA[2],
   2
@@ -257,7 +267,8 @@ struct BAND_STACK {
   uint8_t   relay;
 };
 
-struct BAND_STACK band_stack[9] = {
+struct BAND_STACK band_stack[10] = {
+  {  1875000,  1875000, VFO_A+VFO_LSB, 4 },      // listen to 160 meters
   {  3928000,  3928000, VFO_A+VFO_LSB, 4 },      // relay C  for 80 and 60 meters
   {  6000000,  6000000, VFO_A+VFO_USB, 4 },
   {  7168000,  7176000, VFO_A+VFO_LSB, 2 },      // relay B
@@ -319,7 +330,7 @@ void setup() {
   tft.print("K1URC uBitX w/ Teensy 3.2");   // about 25 characters per line with text size 2
   tft.setTextColor(ILI9341_CYAN);          // or foreground/background for non-transparent text
   tft.setTextSize(1);
-  tft.setCursor(5,230);     tft.print("Mic");
+  tft.setCursor(14,230);     tft.print("Mic");
   tft.setCursor(150,230);     tft.print("Spkr");
   tft.setCursor(319-24,230);     tft.print("Key");
 
@@ -329,10 +340,10 @@ void setup() {
 //  si5351bx_setfreq( 1, 56061400 );          // set LSB mode
   si5351bx_setfreq( 1, IF + BFO );     // set LSB mode
 
- // vfo_freq_disp();
- // vfo_mode_disp();
- // set_relay( band_stack[band].relay );
-  band_change(2);
+  vfo_freq_disp();
+  vfo_mode_disp();
+  set_relay( band_stack[band].relay );
+ // band_change(3);
   
   menu_dispatch = &hidden_menu;             // function pointer for screen touch
 
@@ -444,7 +455,7 @@ int selection;                                // pick the 80 meter filter
 
   selection = touch_decode( t, band_60_menu_data.y_size );
   if( selection != -1 ){
-      band_change(1);
+      band_change(2);
       vfo_a = vfo_b = band_60_menu_data.param[selection];
       vfo_mode = VFO_A+VFO_USB;
       set_relay( band_stack[1].relay );
@@ -577,7 +588,7 @@ char buf[20];
    
    // draw some menu boxes, two per row for now
    y = m->y_size; x = 0;
-   for( i = 0; i < 8; ++i ){
+   for( i = 0; i < 9; ++i ){
       if( m->menu_item[i][0] == 0 ) break;       // null option
       if( y + m->y_size-10  > 239 ) break;       // screen is full
       tft.fillRect(x+5,y+5,160-10,m->y_size-10,m->color);
@@ -758,6 +769,7 @@ int32_t vfo;
 //int pos;           // sceen x position
 //int32_t mult;
 int ca,cb;         // colors
+char bp;
 
    cb = 4;         // unused vfo color in EGA pallet
    ca = 6;         // was 2 or 4
@@ -776,9 +788,22 @@ int ca,cb;         // colors
    else disp_vfo(vfo_a,20,ca);
    if( cb == 10 ) disp_vfo(vfo,170,cb);
    else disp_vfo(vfo_b,170,cb);
-   
 
-   
+   bp = band_priv( band, vfo_b );                    // check if xmit vfo is in band
+   tft.setCursor( 280,60);
+   tft.setTextColor( EGA[10],0 );
+   tft.setTextSize(1);
+   if( bp == 'X' ) { tft.setTextColor( EGA[12],0); tft.print("  OOB"); }
+   //if( bp == 'E' || bp == 'e' ) tft.print("Extra"); 
+   if( bp == 'E' || bp == 'e' ) { tft.setTextColor( EGA[12],0);  tft.print("Extra"); } // my class is Advanced, so display Extra Red
+   if( bp == 'A' || bp == 'a' ) tft.print("  Adv");
+   if( bp == 'G' || bp == 'g' ) tft.print("  Gen");
+   if( bp == 'e' || bp == 'g' || bp == 'a' ) tft.write('-');     // cw digi band
+   else tft.write(' ');
+   //tft.write(bp);
+
+
+    // standard font freq display
 //   tft.setTextSize(3);
 //   tft.setCursor(50,20);
 //   tft.setTextColor(EGA[10],0);
@@ -933,21 +958,88 @@ int32_t as;
 //      tft.drawLine(0,128,319,128,EGA[4]);
 //      tft.drawLine(0,129,319,129,EGA[4]);
 //   }
-  
 
- //  PhaseChange(0);           // just print current value
- //  tft.setCursor(262,78);    // print bandwidth ( spacing 12 pixel ? )
- //  tft.setTextSize(1);
- //  tft.setTextColor(EGA[14],0);
- //  tft.print("BW: ");
- //  tft.print(band_width_menu_data.menu_item[band_width_menu_data.current]);
- //  tft.setCursor(262,90);
- //  tft.print("Stp: ");
- //  if(stp <= 1000 ) p_leading(stp,4);
- //  tft.setCursor(262,102);
- //  tft.print("Atn: ");
- //  tft.print(peak_atn - 15);   tft.write(' ');
- //  tft.setCursor(262,114);
-   //tft.print("Sig: ");
-   //tft.print(rms1.read());  
+
+}
+
+
+//  USA: can we transmit here and what mode
+//  lower case for CW portions, upper case for phone segments
+//  X - out of band, E - Extra, A - Advanced class, G - General
+char band_priv( int band,  uint32_t f ){
+char r = 'X';
+
+   // skipping 160 meters for now, adjust band to match this code
+   --band;
+   
+   if( band != 1 ) f = f / 1000;             // test 1k steps
+   else f = f / 100;                         // 60 meters, test 500hz steps
+   switch( band ){                           // is there an easy way to do this.  This seems like the hard way.
+       case 0:
+          if( f >= 3500 && f <= 4000 ){
+             if( f < 3525 ) r = 'e';
+             else if( f < 3600 ) r = 'g';
+             else if( f < 3700 ) r = 'E';
+             else if( f < 3800 ) r = 'A';
+             else r = 'G';
+          }
+       break;
+       case 1:
+          if( (vfo_mode & VFO_USB) || (vfo_mode & VFO_DIGI) ){
+             if( f == 53305 || f == 53465 || f == 53570 || f == 53715 || f == 54035 ) r = 'G';
+          }
+          if( vfo_mode & VFO_CW ){
+             if( f == 53320 || f == 53480 || f == 53585 || f == 53730 || f == 54050 ) r = 'g'; 
+          }
+       break;
+       case 2:
+          if( f >= 7000 && f <= 7300 ){
+             if( f < 7025 ) r = 'e';
+             else if ( f < 7125 ) r = 'g';
+             else if ( f < 7175 ) r = 'A';
+             else r = 'G';
+          }
+       break;
+       case 3:
+          if( f >= 10100 && f <= 10150 ) r = 'g';
+       break;
+       case 4:
+          if( f >= 14000 && f <= 14350 ){
+             if( f < 14025 ) r = 'e';
+             else if( f < 14150 ) r = 'g';
+             else if( f < 14175 ) r = 'E';
+             else if( f < 14225 ) r = 'A';
+             else r = 'G';
+          }
+       break;
+       case 5:
+          if( f >= 18068 && f <= 18168 ){
+             if( f < 18110 ) r = 'g';
+             else r = 'G';
+          }
+       break;
+       case 6:
+          if( f >= 21000 && f <= 21450 ){
+             if( f < 21025 ) r = 'e';
+             else if( f < 21200 ) r = 'g';
+             else if( f < 21225 ) r = 'E';
+             else if( f < 21275 ) r = 'A';
+             else r = 'G';
+          }
+       break;
+       case 7:
+         if( f >= 24890 && f <= 24990 ){
+            if( f < 24930 ) r = 'g';
+            else r = 'G';
+         }
+       break;
+       case 8:
+         if( f >= 28000 && f <= 29700 ){
+            if( f < 28300 ) r = 'g';
+            else r = 'G';
+         }
+       break;
+   }
+
+  return r;
 }
