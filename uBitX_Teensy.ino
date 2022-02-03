@@ -24,10 +24,15 @@
  * A plan outline:           
  * 
  *    The DAC pin will do double or triple duty, sound to speaker, sound to microphone in for digital modes, AGC and ALC control.
+ *      An alternate idea is to use PWM for the transmit audio.  Can put the signal on the Audio Jack - MIC.
  *      Audio down to the main board via the sidetone pin.  Circuit mods needed and some trim pots for levels.
+ *        Audio could go down via the Audio Jack - Vol-HIGH. No mods to the sidetone filter needed. Need to remove a resistor
+ *        to break the audio chain with either method. 
  *      For digital modes turn the volume control down so you don't hear the transmit tones.
+ *        If use PWM for transmit, this is a non-issue. 
  *      For digital modes will need to remove the microphone from the jack or will tx room noise. 
  *    Will need a jumper to the main board to pick up audio for A2 analog input. May need an op-amp to increase the signal level.
+ *      Can steal the Speaker pin on the Audio jack.
  *      
  *    RX audio read via A2 AC coupled, processed and output via the Teensy DAC pin.  Using Teensy Audio Library.
  *    12 or 13 usable bits out of 16 bits sampled, will need some form of AGC to keep the A/D in range.
@@ -91,15 +96,19 @@
  *        Did not implement for 160 meters.
  *      Added some frequency presets to the 60 meter menu - 630 meters, some ssb aircraft frequencies.
  *      Added rudimentary CAT control using Argonaut V protocol.  Can fix any inaccuracies as needed. 
+ *      Added TR switching.
+ *      Added a keyer with TR sequencing.  Avoids sending while the relays are switching.  No sidetone yet. 
  *      
  *      
  *  To do.    
  *      Finish my last project.
- *      Test TX.  Freq change needed if CW mode.  ( send CW via Audio Keying of Sidetone is an option also, J2B? )
+ *      Test TX.
+ *      Generic number set menu using the encoder for things like key_speed, sidetone volume, 
+ *        vertical menu in decode area? touch side, touch selection, adjust, touch selection to exit ?
  *      Terminal Mode.
  *      Audio design using the Teensy Audio tool. Maybe start with just input to output to get signal levels correct.
- *      Change VFO to use PLLB and even divider.
- *      CW keyer.  ( wait for circuit changes as going to use digital pins ).  CW sequencer.  Try CW power levels idea.
+ *      Change VFO to use PLLB and even divider.  Not sure needed.  Seems to work fine as is. 
+ *      Try CW power levels idea.
  *      Measure signal level and see if we need more or less signal for the Teensy A/D. DAC will need attenuation.  Convert to DSP audio.
  *        Think about a FET to gate the standard audio through. Could then do A/B comparison. Might be useful for very weak signals. 
  *      CW decoder.   Hell decoder.
@@ -194,9 +203,24 @@ XPT2046_Touchscreen ts(8);
 int32_t  vfo_a = 7255000, vfo_b = 7255000;
 uint8_t  vfo_mode = VFO_A + VFO_LSB;
 int band = 3;                          // 40 meters
-int transmitting;                      // status of TR
 
-uint8_t  fast_tune;                    // double tap encoder to toggle
+int transmitting;                      // status of TR
+uint16_t cw_tr_delay = 350;            // semi breakin time
+uint8_t  fast_tune = 1;                // double tap encoder to toggle
+uint8_t  cat_tx;                       // a flag that CAT is in control of the transmitter
+
+#define STRAIGHT    0          // CW keyer modes
+#define ULTIMATIC   1
+#define MODE_A      2
+#define MODE_B      3
+#define PRACTICE_T  4          // last options toggle practice and use of the touch keyer, and swap
+#define KEY_SWAP    5
+uint8_t key_mode = ULTIMATIC;
+uint8_t cw_practice = 1;
+uint8_t key_swap = 0;
+uint8_t wpm = 14;
+uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack
+
 
 //   Touch menu's
 void (* menu_dispatch )( int32_t );    // pointer to function that is processing screen touches
@@ -311,7 +335,7 @@ void setup() {
   pinMode( LP_C, OUTPUT);
   pinMode( CW_KEY, OUTPUT);
   digitalWriteFast( TR, LOW );
-  digitalWriteFast( LP_A, LOW );         // !!! LP relays should be set up for the starting band
+  digitalWriteFast( LP_A, LOW );         // LP relays should be set up for the starting band.  Done below.
   digitalWriteFast( LP_B, LOW );         // they don't switch on until TR goes high
   digitalWriteFast( LP_C, LOW );
   digitalWriteFast( CW_KEY, LOW );
@@ -331,7 +355,7 @@ void setup() {
   tft.setRotation(1);
   
   ts.begin();                               // touchscreen
-  ts.setRotation(3);                        // ? should have been 1, same as print rotation
+  ts.setRotation(3);                        // ? should have been 1, same as print rotation. This screen is different.
   
   tft.setTextSize(2);                       // sign on message
   tft.setTextColor(ILI9341_WHITE);          // or foreground/background for non-transparent text
@@ -379,10 +403,11 @@ int t2;
       
       t2 = button_state(0);
       if( t2 > DONE ) button_process(t2);
-
+      //if( vfo_mode & VFO_CW ) keyer();
    }
 
-   radio_control();
+   radio_control();                         // CAT
+   check_ptt();
    
 }
 
@@ -390,9 +415,11 @@ int t2;
 void band_change( int to_band ){
 int val;
 
-   band_stack[band].vfoa = vfo_a;
-   band_stack[band].vfob = vfo_b;
-   band_stack[band].mode = vfo_mode;
+   if( oob == 0 ){
+      band_stack[band].vfoa = vfo_a;
+      band_stack[band].vfob = vfo_b;
+      band_stack[band].mode = vfo_mode;
+   }
    band = to_band;
    vfo_a = band_stack[band].vfoa;
    vfo_b = band_stack[band].vfob;
@@ -528,12 +555,15 @@ int selection;
         break;
         case 3:  vfo_mode &= 0x7;                         // clear all modes, save vfo, split
                  vfo_mode |= VFO_CW;                      // set cw mode
-        break;
+                 fast_tune = 0;                           // try default tune rates, slow for cw, fast for SSB,
+        break;                                            // always can toggle with double tap encoder
         case 4:  vfo_mode &= 0x7;
                  vfo_mode |= VFO_USB;
+                 fast_tune = 1;
         break;
         case 5:  vfo_mode &= 0x7;
                  vfo_mode |= VFO_LSB;
+                 fast_tune = 1;
         break;         
         case 6:  vfo_mode &= 0x7;
                  vfo_mode |= VFO_AM;   
@@ -808,6 +838,7 @@ char bp;
    else disp_vfo(vfo_b,170,cb);
 
    bp = band_priv( band, vfo_b );                    // check if xmit vfo is in band
+   oob = ( bp == 'X' ) ? 1 : 0;                      // flag if out of band, don't save vfo to bandstack
    tft.setCursor( 280,60);
    tft.setTextColor( EGA[10],0 );
    tft.setTextSize(1);
@@ -1155,7 +1186,7 @@ unsigned long val4;
 
    cmd2 = command[1];
    switch(cmd2){
-    case 'X':   stage_str("RADIO START"); stage('\r'); break; 
+    case 'X':   stage_str((char*)"RADIO START\r"); break; 
     case 'O':   /* split */ 
       if( command[2] == 1 ) vfo_mode |= VFO_SPLIT;
       else vfo_mode &= 0xff ^ VFO_SPLIT;
@@ -1208,7 +1239,7 @@ int len, i;
       stage_long( vfo_b );
     break;
     case 'V':   /* version */
-      stage_str("ER 1010-516");
+      stage_str((char *)"ER 1010-516");
     break;
     case 'W':          /* receive bandwidth */
        stage(30);
@@ -1258,14 +1289,15 @@ int len, i;
 }
 
 
-void stage_str( String st ){      // !!! change this to use a char array
-unsigned int i;
+void stage_str( char * st ){
+//unsigned int i;
 char c;
 
-  for( i = 0; i < st.length(); ++i ){
-     c = st.charAt( i );
-     stage(c);
-  }    
+  while( ( c = *st++ ) ) stage(c);
+  //for( i = 0; i < st.length(); ++i ){
+  //   c = st.charAt( i );
+  //   stage(c);
+  //}    
 }
 
 void stage_long( long val ){
@@ -1316,8 +1348,8 @@ char cmd2;
    
    cmd2 = command[1];
    switch(cmd2){
-     case '0':  rx();  break;    // enter rx mode
-     case '1':  tx();  break;    // TX
+     case '0':  rx(); cat_tx = 0; break;    // enter rx mode
+     case '1':  tx(); cat_tx = 1; break;    // TX
    }
 
 }
@@ -1325,9 +1357,9 @@ char cmd2;
 // function stubs for cat calls
 void cat_qsy( uint32_t freq ){       // test if a band change is needed
 
+   band_check( freq );
    if( vfo_mode & VFO_A ) vfo_a = freq;
    else vfo_b = freq;
-   band_check( freq );
    vfo_freq_disp();
 }
 
@@ -1366,16 +1398,160 @@ void status_display(){
 
 /********************* end Argo V CAT ******************************/
 
+// transmit control from different sources: Keyer, PTT, CAT
+// wish to sequence the keyer to avoid short first elements and transmitting during relay switching
+
+void cw_sequencer( uint16_t val ){                             // call with val == 0x8000 to key tx, 0 for key up
+static uint16_t cw_seq;                                        // cw sent behind by 16 ms, avoid sending during relay switching
+static uint16_t mod;                                           // counter for semi breakin
+ 
+   cw_seq >>= 1;
+   cw_seq |= val;                                              // save a bit to send 16ms later
+   if( cw_seq ) mod = cw_tr_delay;                             // still sending
+
+   if( cw_seq & 1 ) digitalWriteFast( CW_KEY, HIGH);           // key cw on and off
+   else digitalWriteFast( CW_KEY, LOW );
+   
+   if( mod ) --mod;                                            // delay the return to rx mode
+
+   if( mod && transmitting == 0 ) tx();                        // turn the transmitter on and off
+   if( transmitting && mod == 0 ) rx();
+
+}
+
+void check_ptt(){
+
+  if( cat_tx || (vfo_mode & VFO_CW) ) return;                   // it's not my job !!! disabled for tx testing
+
+  if( transmitting && digitalReadFast( PTT ) == HIGH ) rx();
+  if( transmitting == 0 && digitalReadFast( PTT ) == LOW ) tx();
+  
+}
+
 // what needs to happen to return to rx mode
 void rx(){
 
   transmitting = 0;
-  
+  digitalWriteFast( TR, LOW );
+  if( vfo_mode & VFO_CW ){
+     si5351bx_setfreq( 1, IF + BFO );                // CW is on LSB mode
+     si5351bx_setfreq( 0, BFO );
+     if( vfo_mode & VFO_B ) si5351bx_setfreq(2, vfo_b + IF );
+     else si5351bx_setfreq( 2, vfo_a + IF );
+  }
 }
 
 // what needs to happen to enter tx mode
 void tx(){
 
   transmitting = 1;
+  
+  if( vfo_mode & VFO_CW ){                  // turn off the IF and Prod detector mixers
+     si5351bx_setfreq( 0, 0 );
+     si5351bx_setfreq( 1, 0 );
+     si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now, vfo B is always the tx vfo
+  }
+
+    // digitalWriteFast( TR, HIGH );          // !!! enable when ready
+
+}
+
+
+#define DIT 1
+#define DAH 2
+
+int read_paddles(){                    // keyer function
+int pdl;
+
+   pdl = digitalReadFast( DAH_pin ) << 1;
+   pdl += digitalReadFast( DIT_pin );
+
+   pdl ^= 3;                                                // make logic positive
+   if( key_swap ){ 
+      pdl <<= 1;
+      if( pdl & 4 ) pdl += 1;
+      pdl &= 3;
+   }
+
+   return pdl;
+}
+
+void side_tone_on(){
+
+//  SideTone.frequency(700);
+//  SideTone.amplitude(side_gain);
+//  Volume.gain(0,0.0);
+//  Volume.gain(3,af_gain);   // or make this a constant to remove volume setting from the sidetone adjustment
+//  if( cw_practice == 0 ) tx();
+}
+
+void side_tone_off(){
+
+//  Volume.gain(3,0.0);
+//  if( transmitting ) rx();
+//  Volume.gain(0,af_gain);
+}
+
+
+// http://cq-cq.eu/DJ5IL_rt007.pdf      all about the history of keyers
+
+#define WEIGHT 200        // extra weight for keyed element
+
+void keyer( ){            // this function is called once every millisecond
+static int state;
+static int count;
+static int cel;           // current element
+static int nel;           // next element - memory
+static int arm;           // edge triggered memory mask
+static int iam;           // level triggered iambic mask
+int pdl;
+uint16_t seq;             // sequencer bit.  0x8000 or 0
+
+   pdl = read_paddles();
+   if( count ) --count;
+   seq = 0;                                // default to not sending
+
+   switch( state ){
+     case 0:                               // idle
+        cel = ( nel ) ? nel : pdl;         // get memory or read the paddles
+        nel = 0;                           // clear memory
+        if( cel == DIT + DAH ) cel = DIT;
+        if( cel == 0 ) break;
+        if( key_mode == STRAIGHT ){        // straight key stays in state 0
+            seq = 0xf000;                  // 4ms debounce enough?
+            break;
+        }
+        iam = (DIT+DAH) ^ cel;
+        arm = ( iam ^ pdl ) & iam;         // memory only armed if alternate paddle is not pressed at this time, edge trigger
+                                                    // have set up for mode A
+        if( key_mode == MODE_B ) arm = iam;         // mode B - the descent into madness begins.  Level triggered memory.
+        if( key_mode == ULTIMATIC ) iam = cel;      // ultimatic mode
+        
+        count = (1200+WEIGHT)/wpm;
+        if( cel == DAH ) count *= 3;
+        state = 1;
+        side_tone_on();
+        seq = 0x8000;                         // put a bit in the sequencer delay line
+     break; 
+     case 1:                                  // timing the current element. look for edge of the other paddle
+        seq = 0x8000;                         // assume still sending
+        if( count ) nel = ( nel ) ? nel : pdl & arm;
+        else{
+           count = 1200/wpm;
+           state = 2;
+           side_tone_off();
+           seq = 0;                           // not sending
+        }
+     break;   
+     case 2:                                  // timing the inter-element space
+        if( count ) nel = ( nel ) ? nel : pdl & arm;
+        else{
+           nel = ( nel ) ? nel : pdl & iam;   // sample alternate at end of element and element space
+           state = 0;
+        }
+     break;   
+   }
+
+   cw_sequencer( seq );                       // add a bit to the delay line each ms
   
 }
