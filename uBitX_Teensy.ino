@@ -24,18 +24,29 @@
  * A plan outline:           
  * 
  *    The DAC pin will do double or triple duty, sound to speaker, sound to microphone in for digital modes, AGC and ALC control.
+ *      Leaning toward no ATTN in the front end if it works without overloading the Teensy A/D. So no ALC. 
  *      An alternate idea is to use PWM for the transmit audio.  Can put the signal on the Audio Jack - MIC.
  *      Audio down to the main board via the sidetone pin.  Circuit mods needed and some trim pots for levels.
- *        Audio could go down via the Audio Jack - Vol-HIGH. No mods to the sidetone filter needed. Need to remove a resistor
+ *        Audio could go down via the Audio Connector - Vol-HIGH. No mods to the sidetone filter needed. Need to remove a resistor
  *        to break the audio chain with either method. 
  *      For digital modes turn the volume control down so you don't hear the transmit tones.
- *        If use PWM for transmit, this is a non-issue. 
+ *        If use PWM for transmit, this is a non-issue.
+ *        Audio Library uses special pins for PWM ( with DMA ) so probably can't use that ( no way to turn it off other than volume level )
+ *          I have already wired the special pins which is another negative toward this idea.
+ *          Try the simple way first - DAC does double duty.
  *      For digital modes will need to remove the microphone from the jack or will tx room noise. 
  *    Will need a jumper to the main board to pick up audio for A2 analog input. May need an op-amp to increase the signal level.
- *      Can steal the Speaker pin on the Audio jack.
- *      
- *    RX audio read via A2 AC coupled, processed and output via the Teensy DAC pin.  Using Teensy Audio Library.
- *    12 or 13 usable bits out of 16 bits sampled, will need some form of AGC to keep the A/D in range.
+ *      Can steal the Speaker pin on the Audio connector.
+ *    Looks like all the needed signals could be on the Audio connector, Vol-Hi, MIC, steal the SPKR wire.
+ *    
+ *    Digital TX.  Will work with USB audio with one DAC going to both MIC and VOL-HI,  but could it work with the microphone?
+ *      Would need to break the bi-directional audio path in and out of the product detector.
+ *        Rx audio gated or relayed through, Tx audio path broken and sampled by the Teensy.  Alternate use for A3.  
+ *        Digital audio into the product detector now tx modulator.
+ *        And interesting idea would be to generate AM with only one sideband. ( one sideband stripped by the 11 meg filter )
+ *        Two DAC's would be useful as don't want tx audio into the speaker( sidetone exception ).  I2C DAC?
+ *        With Digital Tx audio could have power control / alc.
+ *  
  *      
  *    For CW mode
  *      Can control power out via the to be installed ALC/AGC attenuator in the rf line to/from the first mixer.
@@ -44,6 +55,9 @@
  *         So no short dits or dahs when first key up.
  *      Terminal mode.  Can use terminal tx/rx or CAT, not both at the same time.
  *         
+ *    RX audio read via A2 AC coupled, processed and output via the Teensy DAC pin.  Using Teensy Audio Library.
+ *    12 or 13 usable bits out of 16 bits sampled, will need some form of AGC to keep the A/D in range.
+
  *    Reduce the gain on the signal input to A3 by 4 bits.  Then have 16 bits of dynamic range with a resolution
  *      of 12 bits.  Perhaps the ALC/AGC attenuator then not needed and can do AGC only in software.  Custom library object to merge the
  *      two audio streams, pick A3 or A2 shifted down 4 bits.  This all assumes those 4 bits are just noise.  Or have this stage do
@@ -98,23 +112,31 @@
  *      Added rudimentary CAT control using Argonaut V protocol.  Can fix any inaccuracies as needed. 
  *      Added TR switching.
  *      Added a keyer with TR sequencing.  Avoids sending while the relays are switching.  No sidetone yet. 
+ *      Added a keyer mode submenu. Mode A, Mode B, Straight, Ultimatic 
+ *      Added some touch targets to the hidden menu.  Touch area is much larger than the targets.
+ *      Added a multi function menu where values are changed with the encoder. ( keyer speed for example )
+ *      Added a toogles menu where values are turned on and off ( swap keyer Dit and Dah for example )
  *      
  *      
  *  To do.    
- *      Finish my last project.
  *      Test TX.
- *      Generic number set menu using the encoder for things like key_speed, sidetone volume, 
- *        vertical menu in decode area? touch side, touch selection, adjust, touch selection to exit ?
+ *      Low power tune mode using low amplitude sidetone - DAC output into MIC
+ *        USB tx audio also uses DAC into MIC so nothing but software to implement.
  *      Terminal Mode.
+ *      The touch calibration is from a previous project, seems to be working ok but could be reviewed.
  *      Audio design using the Teensy Audio tool. Maybe start with just input to output to get signal levels correct.
- *      Change VFO to use PLLB and even divider.  Not sure needed.  Seems to work fine as is. 
+ *      Change VFO to use PLLB and even divider.  Not sure this is needed.  Seems to work fine as is. 
  *      Try CW power levels idea.
  *      Measure signal level and see if we need more or less signal for the Teensy A/D. DAC will need attenuation.  Convert to DSP audio.
  *        Think about a FET to gate the standard audio through. Could then do A/B comparison. Might be useful for very weak signals. 
+ *          Could put this on the Teensy adapter board.  stolen spkr to vol-hi w/ resistor isolation from A/D and DAC
  *      CW decoder.   Hell decoder.
  *      Audio scope, audio FFT displays.
+ *      Noise reduction, auto notch.
+ *      CW filters.
  *      Work with the ATU.  Mounting, add inductors, firmware. Kind of a separate project. 
  *      Some pictures for documentation.
+ *      PONG ?
 */         
 
 
@@ -206,19 +228,19 @@ int band = 3;                          // 40 meters
 
 int transmitting;                      // status of TR
 uint16_t cw_tr_delay = 350;            // semi breakin time
-uint8_t  fast_tune = 1;                // double tap encoder to toggle
+int      fast_tune = 1;                // double tap encoder to toggle
 uint8_t  cat_tx;                       // a flag that CAT is in control of the transmitter
 
 #define STRAIGHT    0          // CW keyer modes
 #define ULTIMATIC   1
 #define MODE_A      2
 #define MODE_B      3
-#define PRACTICE_T  4          // last options toggle practice and use of the touch keyer, and swap
+#define PRACTICE_T  4          // last options toggle practice, and swap
 #define KEY_SWAP    5
 uint8_t key_mode = ULTIMATIC;
-uint8_t cw_practice = 1;
-uint8_t key_swap = 0;
-uint8_t wpm = 14;
+int     cw_practice = 1;
+int     key_swap = 0;
+int     wpm = 14;
 uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack
 
 
@@ -226,7 +248,7 @@ uint8_t oob;                           // out of band flag, don't save vfo's to 
 void (* menu_dispatch )( int32_t );    // pointer to function that is processing screen touches
 
 struct menu {
-   char title[16];
+   char title[20];
    const char *menu_item[10];    // array of pointers to strings, (even number needed for 2 wide menu)
    int32_t param[10];
    int y_size;                  // x size will be half the screen, two items on a line for now
@@ -245,13 +267,30 @@ const char m_am[]    = " AM";
 const char m_digi[]  = " DIGI";
 
 struct menu mode_menu_data = {
-   { "   VFO Mode" },
+   { " VFO Mode (keyer)" },
    { m_vfoa,m_vfob,m_split,m_cw,m_usb,m_lsb,m_am,m_digi },
    {0,1,2,3,4,5,6,7,-1,-1},
    48,
    EGA[1],
    5
 };
+
+const char m_keys[] = " Straight";
+const char m_keyu[] = " Ultimatic";
+const char m_keya[] = " Mode A";
+const char m_keyb[] = " Mode B";
+const char m_keyp[] = " Practice";
+const char m_keyw[] = " Swap";
+
+struct menu keyer_menu_data = {
+  { " Keyer Mode" },
+  { m_keys,m_keyu,m_keya,m_keyb,m_keyp,m_keyw },
+  { 0,1,2,3,4,5,-1,-1,-1,-1 },
+  40,
+  EGA[2],
+  1
+};
+
 
 // band menu
 const char b_160[] = " 160m rx";
@@ -313,12 +352,44 @@ struct BAND_STACK band_stack[10] = {
   { 28250000, 28250000, VFO_A+VFO_USB, 0 }
 };
 
+struct multi {                         // all multi variables type int, functions that use them to map to floats if needed
+   char title[20];                     // value 0 to 99 - functions to map as needed
+   int num;                            // now many of the 10 slots are actually in use
+   const char *menu_item[10];          // variable names
+   int *val[10];                       // variable pointers
+   int current;                        // adjusting this one now
+};
 
+const char mf_ks[] = " Key Spd";
+const char mf_du[] = " Dummy";
+const char mf_tp[] = " TunePwr";
+
+int dummy;         // !!!
+int dummy2;        // !!!
+struct multi multi_fun_data = {
+   " Multi Adj  (exit)",
+   3,
+   { mf_ks, mf_du, mf_tp },
+   { &wpm, &dummy, &dummy2 },
+   0
+};
+
+const char tt_ks[] = "Key Swap";
+const char tt_kp[] = "Practice";
+const char tt_ft[] = "FastTune";
+
+struct multi toggles_data = {
+   " Toggle Values",
+   3,
+   { tt_ks, tt_kp, tt_ft },
+   { &key_swap, &cw_practice, &fast_tune },
+   2
+};
 
 // screen owners
-#define DECODE 0
-#define KEYBOARD 1
-#define MENUS    2
+#define DECODE  0
+#define MULTI   1
+#define MENUS   2
 uint8_t  screen_owner = DECODE;
 
 extern void initOscillators();
@@ -367,16 +438,18 @@ void setup() {
   tft.setCursor(150,230);     tft.print("Spkr");
   tft.setCursor(319-24,230);     tft.print("Key");
 
-  Wire.begin();                        // !!! interrupt and dma options, speed options
+  Wire.begin();                             // I2C_OP_MODE_DMA, I2C_OP_MODE_ISR possible options.
+  Wire.setClock(400000);
   initOscillators();                        // sets bfo
 //  si5351bx_setfreq( 1, 33948600 );          // set LSB mode
 //  si5351bx_setfreq( 1, 56061400 );          // set LSB mode
-  si5351bx_setfreq( 1, IF + BFO );     // set LSB mode
+  si5351bx_setfreq( 1, IF + BFO );          // set LSB mode
 
   vfo_freq_disp();
   vfo_mode_disp();
   set_relay( band_stack[band].relay );
  // band_change(3);                         // can start with a different band if desired
+  mf_bar_disp();
   
   menu_dispatch = &hidden_menu;             // function pointer for screen touch
 
@@ -389,10 +462,13 @@ int t2;
 
 
    t2 = encoder();
-   freq_update( t2 );                    // will have encoder users eventually
+   if( t2 ){
+      if( screen_owner == DECODE ) freq_update( t2 );   // this is kind of a sticky tuning rate effect, see if like this
+      if( screen_owner == MULTI ) multi_fun_encoder( t2 );
+   }
 
    t = touch();
-   if( t ) (*menu_dispatch)(t);          // off to whoever owns the touchscreen
+   if( t ) (*menu_dispatch)(t);             // off to whoever owns the touchscreen
 
 
    //  One ms processing
@@ -403,7 +479,7 @@ int t2;
       
       t2 = button_state(0);
       if( t2 > DONE ) button_process(t2);
-      //if( vfo_mode & VFO_CW ) keyer();
+      //if( vfo_mode & VFO_CW ) keyer();    // !!! wait for wiring change on key jack and Ptt to key jack
    }
 
    radio_control();                         // CAT
@@ -415,7 +491,7 @@ int t2;
 void band_change( int to_band ){
 int val;
 
-   if( oob == 0 ){
+   if( oob == 0 ){                             // only save the vfo's if we are inside an amateur band.
       band_stack[band].vfoa = vfo_a;
       band_stack[band].vfob = vfo_b;
       band_stack[band].mode = vfo_mode;
@@ -452,7 +528,7 @@ void set_relay( int num ){
 
 
 // touch the screen top,middle,bottom to bring up different menus.  Assign menu_dispatch.
-// This is default touch processing.   No menu on the screen.
+// This is default touch processing.
 void hidden_menu( int32_t t ){
 int32_t  yt, xt;
 
@@ -469,9 +545,18 @@ int32_t  yt, xt;
       menu_display( &mode_menu_data,3 );     // pass the mode hack value 3
       menu_dispatch = &mode_menu;            // screen touch goes to mode_menu() now
    }
-   else if ( yt < 110 ){ 
+   else if( yt < 100 ){ 
       menu_display( &band_menu_data,0 );
       menu_dispatch = &band_menu;
+   }
+   else if( yt < 160 && xt < 50 ){            // left side of screen, multi menu
+      multi_display( &multi_fun_data, 1 );
+      menu_dispatch = &multi_fun_touch;
+      screen_owner = MULTI;
+   }
+   else if( yt < 160 && xt > 320-50 ){
+      multi_display( &toggles_data, 1 );
+      menu_dispatch = &toggles_touch;
    }
    /*
    else if( yt > 190 && xt > 270 && (vfo_mode & VFO_CW) ){  // keyboard CW sending
@@ -493,16 +578,46 @@ int selection;                                // pick the 80 meter filter
 
   selection = touch_decode( t, band_60_menu_data.y_size );
   if( selection != -1 && band_60_menu_data.param[selection] != -1 ){
-      band_change(2);
+       // 630 meters special case in this menu
+      if( band_60_menu_data.param[selection] < 3000000 ) band_change(0);   // 160 meters relays setting
+      else band_change(2);
       vfo_a = vfo_b = band_60_menu_data.param[selection];
       vfo_mode = VFO_A+VFO_USB;
-      set_relay( band_stack[2].relay );
+      // set_relay( band_stack[2].relay );           // redundant
       band_60_menu_data.current = selection;
-      band_menu_data.current = 2;
-  }
+      band_menu_data.current = 10;                 // 60 meters is not in band_menu_data, selection 2 is 40 meters - band 3
+  }                                                // set it out of bounds,  no highlighting.
  // vfo_freq_disp();     redundant with cleanup
  // vfo_mode_disp();
   menu_cleanup();
+}
+
+void multi_fun_touch( int32_t t ){
+int selection;
+
+     selection = touch_decode( t, 40 );
+     if( selection == -1 || selection >= multi_fun_data.num ){       // stay in menu, only exit when touch exit
+        // check limits on some variables
+        wpm = constrain( wpm, 10, 40 );
+        menu_cleanup();
+        return;
+     }
+     multi_fun_data.current = selection;             // selected a value
+     multi_display( &multi_fun_data, 0 );            // display all again for color highlighting
+}
+
+void toggles_touch( int32_t t ){
+int selection;
+int *p;
+
+     selection = touch_decode( t, 40 );
+     if( selection != -1 && selection < toggles_data.num ){ 
+        toggles_data.current = selection;
+        p = toggles_data.val[selection];
+        *p ^= 1;   
+     }
+     menu_cleanup();
+  
 }
 
 void band_menu( int32_t t ){
@@ -521,6 +636,29 @@ int selection;
    menu_cleanup();
 }
 
+void keyer_menu( int32_t t ){
+int selection;
+
+   selection = touch_decode( t, keyer_menu_data.y_size );
+   if( selection == -1 ){                                    // title was touched
+      menu_cleanup();
+      return;
+   }
+
+   if( keyer_menu_data.param[selection] != -1 ){
+      
+      if( selection < 4 ){
+          key_mode = keyer_menu_data.param[selection];
+          keyer_menu_data.current = selection;
+      }
+      else if( selection == 4 ) cw_practice ^= 1;            // a toggle not in the toggles menu
+      else if( selection == 5 ) key_swap ^= 1;
+   }
+   
+   menu_cleanup();
+}
+
+
 void mode_menu( int32_t t ){
 int selection;
 // int current;
@@ -529,7 +667,9 @@ int selection;
                                                             
    selection = touch_decode( t, mode_menu_data.y_size );
    if( selection == -1 ){                                    // title was touched
-      menu_cleanup();
+      // menu_cleanup();
+      menu_display( &keyer_menu_data,0 );                    // sub menu
+      menu_dispatch = &keyer_menu;
       return;
    }
    if( mode_menu_data.param[selection] != -1 ){
@@ -587,6 +727,37 @@ void menu_cleanup(){
    screen_owner = DECODE;
    vfo_mode_disp();
    vfo_freq_disp();
+   mf_bar_disp();
+}
+
+void mf_bar_disp(){                 // display a bar on left side to show a menu exists there
+const char msg[]  = "Multi Fun";    // also add some other boxes for menu hotspots, the hidden menu is no longer hidden
+const char msg2[] = "Band";
+const char msg3[] = " Toggles ";
+int i;
+
+   tft.setTextSize(1);
+   tft.setTextColor(EGA[15]);
+   tft.fillRect( 0,70,8,100,EGA[4] );           // multi function
+   for( i = 0; i < 9; ++i ){
+      tft.setCursor( 1, 77+10*i );
+      tft.write( msg[i] );
+   }
+   tft.fillRect( 319-8,70,8,100,EGA[4] );       // toggles
+   for( i = 0; i < 9; ++i ){
+      tft.setCursor( 319-7, 77+10*i );
+      tft.write( msg3[i] );
+   }   
+   tft.fillRect( 148,65,32,8,EGA[4] );           // band select
+   tft.setCursor( 153,65 );
+   tft.print( msg2 );
+   tft.fillRect( 319-8,0,8,20,EGA[4] );          // mode select, not much room here for text
+   tft.setCursor( 319-7,1 );
+   tft.write( 'M' );
+   tft.setCursor( 319-7,11);
+   tft.write( 'd' );
+
+   
 }
 
 uint32_t touch(){
@@ -615,6 +786,61 @@ static uint8_t   z;
      return ( x << 8 ) | y;
    }
    return 0;
+}
+
+void multi_display( struct multi *m, int clr ){           // display name value pairs      // use also for toggles ?
+int i,x,y; 
+char buf[20];
+
+   if( clr ){                                       // new menu, else have menu on screen and just updating the value pairs
+      tft.setTextColor( ILI9341_WHITE, EGA[2] );    // text is white on background color 
+      tft.fillScreen(ILI9341_BLACK);                // border of menu items is black
+
+      // title box
+      tft.fillRect(5,5,320-10,30,EGA[2]);
+      tft.setCursor( 10,10 );
+      tft.setTextSize(2);
+      tft.print(m->title);
+   }
+   
+   // draw some menu boxes, two per row for now
+   y = 40; x = 0;
+   for( i = 0; i < 10; ++i ){
+      if( m->menu_item[i][0] == 0 ) break;       // null option
+      if( y + 30  > 239 ) break;                 // screen is full
+      if( i >= m->num ) break;                   // redundant to null string test above just in case
+      tft.fillRect(x+5,y+5,160-10,30,EGA[2]);
+      tft.setCursor( x+10,y+10 );
+      if( i == m->current ) tft.setTextColor( ILI9341_YELLOW, EGA[2] );
+      else tft.setTextColor( ILI9341_WHITE, EGA[2] );
+      strncpy(buf,m->menu_item[i],12);    buf[12] = 0;
+      tft.print(buf);
+      tft.setCursor( x+120, y+10 );
+      if( *(m->val[i]) < 10 ) tft.write(' ');
+      tft.print( *(m->val[i]) );
+      x += 160;
+      if( x >= 320 ) x = 0, y += 40;
+   }
+  
+}
+
+void multi_fun_encoder( int b ){             // encoder adjusts a multi function variable up or down, range 0 to 99
+int x,y;                                     // assume structure is multi_fun_data for now
+int i;                                       // toggles will probably just use touch and not the encoder
+int *p;
+                                             
+     i = multi_fun_data.current;
+     if( i >= multi_fun_data.num ) return;   // belts and suspenders
+     p = multi_fun_data.val[i];
+     *p += b;                                // bump the value
+     *p = constrain( *p, 0, 99 );
+     x = ( i & 1 ) ? 160+120 : 120;          // where is the value on the screen?
+     y = 40 * (i/2) + 50;
+     tft.setTextSize(2);
+     tft.setTextColor( ILI9341_YELLOW, EGA[2] );
+     tft.setCursor( x,y);
+     if( *p < 10 ) tft.write(' ');
+     tft.print(*p);
 }
 
 void menu_display( struct menu *m, int mode_hack ){    // display any of the menus on the screen, special highlighting for the mode menu
@@ -984,6 +1210,8 @@ int32_t as;
    tft.setCursor(150,row);
    tft.setTextColor(EGA[4+c],0);
    tft.print("CW");
+   if( cw_practice ) tft.write('p');
+   else tft.write(' ');
 
    tft.setCursor(175,row);
    tft.setTextColor(EGA[4+u],0);
@@ -1404,7 +1632,9 @@ void status_display(){
 void cw_sequencer( uint16_t val ){                             // call with val == 0x8000 to key tx, 0 for key up
 static uint16_t cw_seq;                                        // cw sent behind by 16 ms, avoid sending during relay switching
 static uint16_t mod;                                           // counter for semi breakin
- 
+
+   if( cw_practice ) return;                                   // practice only keys the sidetone
+   
    cw_seq >>= 1;
    cw_seq |= val;                                              // save a bit to send 16ms later
    if( cw_seq ) mod = cw_tr_delay;                             // still sending
