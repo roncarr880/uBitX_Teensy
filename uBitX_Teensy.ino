@@ -21,7 +21,21 @@
  *      and power up.  It should draw about 60 ma on the depleted battery and the screen should light.
  *            
  *            
- * A plan outline:           
+ * A plan outline:    
+ * 
+ *    Getting Digital Audio for both TX and RX with one ADC and one DAC
+ *       The relay M1 M2 is isolated from the existing circuit. Q74 is still connected to TP21.
+ *         A separate relay could be added but M1 or M2 would still need to be isolated from the existing circuit.
+ *       The etch run from TP20 to audio is cut.  M2 is wired to TP20 and M1 is wired to the audio run. Completes the rx audio path.
+ *         The audio run could be connected to M1 on C63 or C50 - negative side. 
+ *       Q70 is wired to +12 so that it is active for both RX and TX.
+ *       Audio is sampled at the output cap on Q70.  It will have RX audio on receive and MIC audio on transmit. No longer connected to M1.
+ *       The DAC is capacitor coupled to two trim pots.  Wiper of one goes to TP21 for RX audio to speaker.
+ *       Wiper of the other trim pot goes to M3 ( the unused relay contact ) for transmit audio.
+ *       During TX, Q74 shorts out the RX audio to the speaker letting the DAC work for both TX and RX. During RX Q6 is not powered.
+ *       During TX, M2 switches to M3 passing the TX audio.
+ *       4 etch cuts or 3 etch cuts and remove R52. Some wires and two trim pots.  DAC cap about 1uf maybe.
+ *       Some wiring may need to be shielded or twisted pair.
  * 
  *    The DAC pin will do double or triple duty, sound to speaker, sound to microphone in for digital modes, AGC and ALC control.
  *      Leaning toward no ATTN in the front end if it works without overloading the Teensy A/D. So no ALC. 
@@ -119,7 +133,7 @@
  *      
  *      
  *  To do.    
- *      Test TX.
+ *      Test TX.  Bursts of rf when ptt, is that just the mic switching noise?
  *      Low power tune mode using low amplitude sidetone - DAC output into MIC
  *        USB tx audio also uses DAC into MIC so nothing but software to implement.
  *      Terminal Mode.
@@ -134,6 +148,8 @@
  *      Audio scope, audio FFT displays.
  *      Noise reduction, auto notch.
  *      CW filters.
+ *      Debounce PTT needed? Maybe a short latch up timer between the functions tx() rx(), minimum tx on time. 
+ *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time. 
  *      Work with the ATU.  Mounting, add inductors, firmware. Kind of a separate project. 
  *      Some pictures for documentation.
  *      PONG ?
@@ -227,7 +243,7 @@ uint8_t  vfo_mode = VFO_A + VFO_LSB;
 int band = 3;                          // 40 meters
 
 int transmitting;                      // status of TR
-uint16_t cw_tr_delay = 350;            // semi breakin time
+int     cw_tr_delay = 35;              // semi breakin time, in multi fun, actual value is *10 ms.
 int      fast_tune = 1;                // double tap encoder to toggle
 uint8_t  cat_tx;                       // a flag that CAT is in control of the transmitter
 
@@ -361,16 +377,15 @@ struct multi {                         // all multi variables type int, function
 };
 
 const char mf_ks[] = " Key Spd";
-const char mf_du[] = " Dummy";
+const char mf_tr[] = " cwDelay";
 const char mf_tp[] = " TunePwr";
 
-int dummy;         // !!!
 int dummy2;        // !!!
 struct multi multi_fun_data = {
    " Multi Adj  (exit)",
    3,
-   { mf_ks, mf_du, mf_tp },
-   { &wpm, &dummy, &dummy2 },
+   { mf_ks, mf_tr, mf_tp },
+   { &wpm, &cw_tr_delay, &dummy2 },
    0
 };
 
@@ -479,7 +494,7 @@ int t2;
       
       t2 = button_state(0);
       if( t2 > DONE ) button_process(t2);
-      //if( vfo_mode & VFO_CW ) keyer();    // !!! wait for wiring change on key jack and Ptt to key jack
+      if( vfo_mode & VFO_CW ) keyer();
    }
 
    radio_control();                         // CAT
@@ -598,7 +613,8 @@ int selection;
      selection = touch_decode( t, 40 );
      if( selection == -1 || selection >= multi_fun_data.num ){       // stay in menu, only exit when touch exit
         // check limits on some variables
-        wpm = constrain( wpm, 10, 40 );
+        wpm = constrain( wpm, 10, 40 );                              // avoid divide by zero
+        cw_tr_delay = constrain( cw_tr_delay, 10, 99 );              // min tr delay of 100ms max 990
         menu_cleanup();
         return;
      }
@@ -1633,11 +1649,14 @@ void cw_sequencer( uint16_t val ){                             // call with val 
 static uint16_t cw_seq;                                        // cw sent behind by 16 ms, avoid sending during relay switching
 static uint16_t mod;                                           // counter for semi breakin
 
-   if( cw_practice ) return;                                   // practice only keys the sidetone
+   if( cw_practice ){
+       if( transmitting ) rx();                                // entered practice mode while transmitting
+       return;                                                 // practice only keys the sidetone
+   }
    
    cw_seq >>= 1;
    cw_seq |= val;                                              // save a bit to send 16ms later
-   if( cw_seq ) mod = cw_tr_delay;                             // still sending
+   if( cw_seq ) mod = 10*cw_tr_delay;                          // still sending
 
    if( cw_seq & 1 ) digitalWriteFast( CW_KEY, HIGH);           // key cw on and off
    else digitalWriteFast( CW_KEY, LOW );
@@ -1651,7 +1670,7 @@ static uint16_t mod;                                           // counter for se
 
 void check_ptt(){
 
-  if( cat_tx || (vfo_mode & VFO_CW) ) return;                   // it's not my job !!! disabled for tx testing
+  if( cat_tx || (vfo_mode & VFO_CW) ) return;                   // it's not my job
 
   if( transmitting && digitalReadFast( PTT ) == HIGH ) rx();
   if( transmitting == 0 && digitalReadFast( PTT ) == LOW ) tx();
@@ -1682,7 +1701,7 @@ void tx(){
      si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now, vfo B is always the tx vfo
   }
 
-    // digitalWriteFast( TR, HIGH );          // !!! enable when ready
+  digitalWriteFast( TR, HIGH );
 
 }
 
@@ -1694,7 +1713,8 @@ int read_paddles(){                    // keyer function
 int pdl;
 
    pdl = digitalReadFast( DAH_pin ) << 1;
-   pdl += digitalReadFast( DIT_pin );
+ //  pdl += digitalReadFast( DIT_pin );  !!! this pin is floating currently ???  stuck low maybe, disconnected? maybe
+   pdl |= 1;    // !!! disable the dit pin  
 
    pdl ^= 3;                                                // make logic positive
    if( key_swap ){ 
