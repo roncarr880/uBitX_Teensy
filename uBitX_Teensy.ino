@@ -5,7 +5,7 @@
  *    Using a Teensy 3.2 for control and USB audio for soundcard modes ( Teensy can appear in Windows as a 16 bit sound card )
  *    
  *    First the ILI9341 will need to be converted to 3.3 volt operation.  Currently all on 5 volts which apparently works but runs hot.
- *      On the ILI9341 remove the solder jumper at J1.  Install an 82 ohm - 100 ohm resistor from pin 1 ( vcc ) to pin 8 (LED) on top
+ *      On the ILI9341 remove the solder jumper at J1.  Install an 82 ohm or 100 ohm resistor from pin 1 ( vcc ) to pin 8 (LED) on top
  *        of the connector pins.
  *      On the raduino board remove the 7805.  Cut the etch to pin 4 ( reset ) on the outside of the connector near the edge of the board.
  *        There is not much room here.  This removes +5 from the reset pin.    Remove the 22 ohm surface mount resistor near pin 8.  This 
@@ -23,61 +23,17 @@
  *            
  * A plan outline:    
  * 
- *    Getting Digital Audio for both TX and RX with one ADC and one DAC
- *       The relay M1 M2 is isolated from the existing circuit. Q74 is still connected to TP21.
- *         A separate relay could be added but M1 or M2 would still need to be isolated from the existing circuit.
- *       The etch run from TP20 to audio is cut.  M2 is wired to TP20 and M1 is wired to the audio run. Completes the rx audio path.
- *         The audio run could be connected to M1 on C63 or C50 - negative side. 
- *       Q70 is wired to +12 so that it is active for both RX and TX.
- *       Audio is sampled at the output cap on Q70.  It will have RX audio on receive and MIC audio on transmit. No longer connected to M1.
- *       The DAC is capacitor coupled to two trim pots.  Wiper of one goes to TP21 for RX audio to speaker.
- *       Wiper of the other trim pot goes to M3 ( the unused relay contact ) for transmit audio.
- *       During TX, Q74 shorts out the RX audio to the speaker letting the DAC work for both TX and RX. During RX Q6 is not powered.
- *       During TX, M2 switches to M3 passing the TX audio.
- *       4 etch cuts or 3 etch cuts and remove R52. Some wires and two trim pots.  DAC cap about 1uf maybe.
- *       Some wiring may need to be shielded or twisted pair.
- * 
- *    The DAC pin will do double or triple duty, sound to speaker, sound to microphone in for digital modes, AGC and ALC control.
- *      Leaning toward no ATTN in the front end if it works without overloading the Teensy A/D. So no ALC. 
- *      An alternate idea is to use PWM for the transmit audio.  Can put the signal on the Audio Jack - MIC.
- *      Audio down to the main board via the sidetone pin.  Circuit mods needed and some trim pots for levels.
- *        Audio could go down via the Audio Connector - Vol-HIGH. No mods to the sidetone filter needed. Need to remove a resistor
- *        to break the audio chain with either method. 
- *      For digital modes turn the volume control down so you don't hear the transmit tones.
- *        If use PWM for transmit, this is a non-issue.
- *        Audio Library uses special pins for PWM ( with DMA ) so probably can't use that ( no way to turn it off other than volume level )
- *          I have already wired the special pins which is another negative toward this idea.
- *          Try the simple way first - DAC does double duty.
- *      For digital modes will need to remove the microphone from the jack or will tx room noise. 
- *    Will need a jumper to the main board to pick up audio for A2 analog input. May need an op-amp to increase the signal level.
- *      Can steal the Speaker pin on the Audio connector.
- *    Looks like all the needed signals could be on the Audio connector, Vol-Hi, MIC, steal the SPKR wire.
+ *    The easy idea:
+ *       Use the signals on the Audio connector.  Very little modifications to the main board.  ( need CW key jack mods )
+ *       Remove the LM386 from the socket.  Sample audio on VOL-M.  Volume control works like an RF gain control adjusting level into the DSP.
+ *       Connect the DAC to MIC via capacitor, pot for level control, capacitor.  USB audio for DIGI mode transmit uses the DAC.
+ *       Receive Audio to the speaker/headphones using PWM to the SPK on the audio connector. Suspect speaker volume will be low, headphone  
+ *       volume will be loud. Receive audio will also be sent to USB for DIGI modes. 
+ *       
+ *    CW key jack:  remove the pullup resistor to 5 volts.  replace the DIT series resistor with 10 ohm.  Wire PTT from the MIC jack 
+ *       over to the DAH contact on the key jack.  Remove the series resistor for DAH.  Keyer works as DIT, PTT as DAH.
  *    
- *    Digital TX.  Will work with USB audio with one DAC going to both MIC and VOL-HI,  but could it work with the microphone?
- *      Would need to break the bi-directional audio path in and out of the product detector.
- *        Rx audio gated or relayed through, Tx audio path broken and sampled by the Teensy.  Alternate use for A3.  
- *        Digital audio into the product detector now tx modulator.
- *        And interesting idea would be to generate AM with only one sideband. ( one sideband stripped by the 11 meg filter )
- *        Two DAC's would be useful as don't want tx audio into the speaker( sidetone exception ).  I2C DAC?
- *        With Digital Tx audio could have power control / alc.
- *  
- *      
- *    For CW mode
- *      Can control power out via the to be installed ALC/AGC attenuator in the rf line to/from the first mixer.
- *      Perhaps can control CW power also via the Si5351 drive ( 2ma, 4ma, 6ma, 8ma ).
- *      Sidetone keyed with the keyer, actual transmit always behind by the relay on delay time( 20 ms or maybe shorter is ok ).
- *         So no short dits or dahs when first key up.
- *      Terminal mode.  Can use terminal tx/rx or CAT, not both at the same time.
- *         
- *    RX audio read via A2 AC coupled, processed and output via the Teensy DAC pin.  Using Teensy Audio Library.
- *    12 or 13 usable bits out of 16 bits sampled, will need some form of AGC to keep the A/D in range.
-
- *    Reduce the gain on the signal input to A3 by 4 bits.  Then have 16 bits of dynamic range with a resolution
- *      of 12 bits.  Perhaps the ALC/AGC attenuator then not needed and can do AGC only in software.  Custom library object to merge the
- *      two audio streams, pick A3 or A2 shifted down 4 bits.  This all assumes those 4 bits are just noise.  Or have this stage do
- *      early AGC processing with 4 bits of compression on loud signals.  We will need to see what the signal level is at the sample point, 
- *      may actually need an op-amp with gain of 4 bits. 
- *      
+ *    
  *    Values from standard radio,  the PLL remains fixed.
  *      Clock 0 : BFO  11,056,400
  *      Clock 1 : LSB  33,948,600
@@ -93,6 +49,8 @@
  *      
  *    Will break out the VFO from this scheme so that it uses the unused PLL and even dividers for maybe lower jitter.
  *      Maybe can run a divider of 12.  900/12 = 75.  600/12 = 50.  48*12 = 575 - so 80 meters runs PLL slightly out of spec.
+ *      The existing Si5351 scheme seems to work ok, may not implement this idea.  
+ *      Also have listen on 160m and 630m - but still PLL only down to 540 meg for receive. 
  *      
  *      ATU board.   An ATU-100 mini clone from uSDX SOTA radio.
  *        Probably will want to run the I2C through a level converter and run the PIC on the ATU at 5 volts.   
@@ -101,22 +59,21 @@
  *        Maybe can separate 5 volt runs so the PIC can run with the relays off, relays only on during TX like the rest of the radio.
  *          Or would need to use I2C to tell ATU to set the relays. 
  *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
- *                
- *      DSP bandwidth filters for CW. Notch, de-noise possible.  Try AM decoder with Carrier on high side of the filter.
- *        Could use a high Q lowpass to enhance the carrier on the edge of the filter.
- *      
- *      Mount the finals differently, on some thin wood maybe?
- *      Need to rotate the speaker away from the Teensy/ATU?  Top cover 1/4 inch higher may be needed for the ATU.
  *        
- *      Construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
+ *      Mount the finals differently, on some thin wood maybe?
+ *        Saw one picture where someone mounted them to the case bottom with TO220 insulated mounting setup. 
+ *      Need to rotate the speaker away from the Teensy/ATU.  Puts the vent holes above the screen 5 volt regulator.
+ *      Top cover 1/4 inch higher may be needed for the ATU.
+ *        
+ *      Could construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
  *        Use the Teensy audio shield.  Ordered a Softrock with K2 IF, about 4.914 mhz.  Can receive using the IQ DSP and transmit using 
  *        the built in SSB filter at 11 mhz.
- *        Just swap the Teensy board for a different Radio.
- *          Or can route I Q audio to a jack and control the radio with a remote head via CAT control. ( usb host mode ? ).
- *          Bigger screen, speaker, audio amp, etc.  Guess would need audio cables with this idea. 
+ *        This would be a totally different project.  Could order a different v6 next year.  
+ *        Could put Softrock IQ on a jack and run HDSDR or a Teensy remote head. 
+ *          Would need to know the Audio IF in use to make this work as transceiver. 
  */
 
-/*  Change log.   The above discussion is a loose plan, some things will be implemented some not.
+/*  Change log
  *   
  *      Implemented basic control of the receiving functions, mode, band switching.
  *      Added 160 meters to the band stack.  Can listen there, would need an external filter to try transmitting.
@@ -130,20 +87,25 @@
  *      Added some touch targets to the hidden menu.  Touch area is much larger than the targets.
  *      Added a multi function menu where values are changed with the encoder. ( keyer speed for example )
  *      Added a toogles menu where values are turned on and off ( swap keyer Dit and Dah for example )
+ *      Tried the idea of different cw power levels using the Si5351 drive levels 2,4,6,8, ma.  No change in output power.
+ *      Re-wired Teensy pins 3,4 for use with the PWM library object.
  *      
  *      
  *  To do.    
- *      Test TX.  Bursts of rf when ptt, is that just the mic switching noise?
  *      Low power tune mode using low amplitude sidetone - DAC output into MIC
- *        USB tx audio also uses DAC into MIC so nothing but software to implement.
+ *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 may be useful.  They seem to be 11 meg mixed with the
+ *        transmit frequency.  Didn't measure how high they are.  From Groups IO, maybe the mixing is in the final IRF510's.
+ *        Didn't see any on 80 meters. 11-4 11+4 so think they may be filtered with the low pass filter.
+ *        20 meters seem to be a multi mix with spurs at +- 2.4.
+ *        30 meters +- 0.9
+ *        40 meters +- 3.8
+ *        15 meters one at 10.0    10 meters one at 17.8
  *      Terminal Mode.
  *      The touch calibration is from a previous project, seems to be working ok but could be reviewed.
- *      Audio design using the Teensy Audio tool. Maybe start with just input to output to get signal levels correct.
+ *      Audio design using the Teensy Audio tool.
  *      Change VFO to use PLLB and even divider.  Not sure this is needed.  Seems to work fine as is. 
- *      Try CW power levels idea.
- *      Measure signal level and see if we need more or less signal for the Teensy A/D. DAC will need attenuation.  Convert to DSP audio.
- *        Think about a FET to gate the standard audio through. Could then do A/B comparison. Might be useful for very weak signals. 
- *          Could put this on the Teensy adapter board.  stolen spkr to vol-hi w/ resistor isolation from A/D and DAC
+ *      Convert to DSP audio.
+ *      AM detector, carrier at 2.8k tone. 
  *      CW decoder.   Hell decoder.
  *      Audio scope, audio FFT displays.
  *      Noise reduction, auto notch.
@@ -152,32 +114,35 @@
  *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time. 
  *      Work with the ATU.  Mounting, add inductors, firmware. Kind of a separate project. 
  *      Some pictures for documentation.
- *      PONG ?
 */         
 
 
 // Wiring  ( not easy with Nano upside down )  Teensy mounted with USB on the other side for the shortest wiring to the display.
 //  Teensy mounted upside right.
-//  Special wiring will be A2 A3 for audio input and the DAC pin wired to Nano pin 6 - was CW_TONE for audio output.
-//    The Teensy audio library will control these 3 pins.
+//  Special wiring will be A2, and maybe A3 for audio input.  A2 wired to VOL-M via the circuit shown in Audio Library for A/D input.
+//    The DAC pin wired to MIC via some caps and a pot for level.   DAC-cap-pot-cap-MIC.
+//    Pins  D3, D4 wired to SPK via the circuit shown in the Audio Library for PWM output.  LM386 removed from the socket. 
+//    The Teensy audio library will control these 5 pins.
 //  ILI9341 wired for standard SPI as outlined on Teensy web site and it matches the Nano wiring pin for pin
 //    Uses pins 8 to 13 wired to Nano pins 8 to 13
 //  I2C uses the standard A4 A5, so they are wired to Nano A4 A5
 //  The keyer will make use of the PTT pin as either DIT or DAH - digital keyer inputs instead of one analog pin
-//  Teensy free pins A6, A7, A8, A9
+//  Teensy free pins A6, A7
 
 #define TR        7     // to nano pin 7
-                        // nano pin 6 CW_TONE wired to blocking capacitor( value ____ ) to DAC ( A14 )
+                        // nano pin 6 CW_TONE not wired
 #define LP_A      6     // to nano pin 5 
 #define LP_B      5     // to nano pin 4
-#define LP_C      4     // to nano pin 3
-#define CW_KEY    3     // to nano pin 2
+#define LP_C     A9     // to nano pin 3
+#define CW_KEY   A8     // to nano pin 2
 #define DIT_pin  A1     // to nano pin A6  - was KEYER,  short a resistor on main board, remove pullup to 5 volts.
 #define DAH_pin  A0     // to nano pin A3
 #define PTT      A0     // same pin as DAH_pin,  ptt wired over to the key jack, remove a resistor on the main board
 #define ENC_B     0     // to nano A0   These are the Teensy digital pins not the analog pins for the encoder
 #define ENC_A     1     // to nano A1
 #define ENC_SW    2     // to nano A2
+
+// Teensy pins 3 and 4 are audio library pwm output pins.  A14 is the DAC. 
 
 /* button states */
 #define IDLE_ 0
@@ -188,7 +153,6 @@
 #define DTAP 5
 #define LONGPRESS 6
 #define DBOUNCE 50
-
 
 
 #include <ILI9341_t3.h>
@@ -243,9 +207,10 @@ uint8_t  vfo_mode = VFO_A + VFO_LSB;
 int band = 3;                          // 40 meters
 
 int transmitting;                      // status of TR
-int     cw_tr_delay = 35;              // semi breakin time, in multi fun, actual value is *10 ms.
+int     cw_tr_delay = 65;              // semi breakin time, in multi fun, actual value is *10 ms.
 int      fast_tune = 1;                // double tap encoder to toggle
 uint8_t  cat_tx;                       // a flag that CAT is in control of the transmitter
+
 
 #define STRAIGHT    0          // CW keyer modes
 #define ULTIMATIC   1
@@ -254,7 +219,7 @@ uint8_t  cat_tx;                       // a flag that CAT is in control of the t
 #define PRACTICE_T  4          // last options toggle practice, and swap
 #define KEY_SWAP    5
 uint8_t key_mode = ULTIMATIC;
-int     cw_practice = 1;
+int     cw_practice = 1;               // toggle and multi fun variables must be int, have value 0 to 99.
 int     key_swap = 0;
 int     wpm = 14;
 uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack
@@ -355,15 +320,16 @@ struct BAND_STACK {
   uint8_t   relay;
 };
 
+  // don't set up any splits unless set VFO_SPLIT in the mode, else tx on the wrong freq until tune away from the start freq.
 struct BAND_STACK band_stack[10] = {
-  {  1875000,  1875000, VFO_A+VFO_LSB, 4 },      // can listen on 160 meters
+  {  1875000,  1875000, VFO_A+VFO_LSB, 4 },      // can listen on 160 meters, tx has harmonics and spur
   {  3928000,  3928000, VFO_A+VFO_LSB, 4 },      // relay C  for 80 and 60 meters
   {  6000000,  6000000, VFO_A+VFO_USB, 4 },
-  {  7168000,  7176000, VFO_A+VFO_LSB, 2 },      // relay B
-  { 10106000, 10140000, VFO_A+VFO_USB, 2 },
-  { 14200000, 14076000, VFO_A+VFO_USB, 1 },      // relay A
-  { 18100000, 18200000, VFO_A+VFO_DIGI, 1 },
-  { 21100000, 21100000, VFO_A+VFO_CW, 0 },       // default lowpass
+  {  7168000,  7168000, VFO_A+VFO_LSB, 2 },            // relay B
+  { 10106000, 10106000, VFO_A+VFO_USB, 2 },
+  { 14200000, 14076000, VFO_B+VFO_DIGI+VFO_SPLIT, 1 },  // relay A
+  { 18100000, 18100000, VFO_A+VFO_DIGI, 1 },
+  { 21100000, 21100000, VFO_A+VFO_CW, 0 },             // default lowpass
   { 24900000, 24900000, VFO_A+VFO_USB, 0 },
   { 28250000, 28250000, VFO_A+VFO_USB, 0 }
 };
@@ -377,15 +343,15 @@ struct multi {                         // all multi variables type int, function
 };
 
 const char mf_ks[] = " Key Spd";
-const char mf_tr[] = " cwDelay";
-const char mf_tp[] = " TunePwr";
+const char mf_tr[] = " cwDelay";       // 0-99 maps to 0 to 990 ms, min value is 100
+// const char mf_sv[] = " SideVol";       // sidetone volume
+// PWM audio volume
 
-int dummy2;        // !!!
 struct multi multi_fun_data = {
    " Multi Adj  (exit)",
-   3,
-   { mf_ks, mf_tr, mf_tp },
-   { &wpm, &cw_tr_delay, &dummy2 },
+   2,
+   { mf_ks, mf_tr },
+   { &wpm, &cw_tr_delay },
    0
 };
 
@@ -535,7 +501,7 @@ void set_relay( int num ){
    digitalWriteFast( LP_B, LOW );
    digitalWriteFast( LP_C, LOW );
 
-   if( num & 1 ) digitalWriteFast( LP_A, HIGH );
+   if( num & 1 ) digitalWriteFast( LP_A, HIGH );    // relays will actually switch during TX
    if( num & 2 ) digitalWriteFast( LP_B, HIGH );
    if( num & 4 ) digitalWriteFast( LP_C, HIGH );
 }
@@ -1645,12 +1611,13 @@ void status_display(){
 // transmit control from different sources: Keyer, PTT, CAT
 // wish to sequence the keyer to avoid short first elements and transmitting during relay switching
 
+// sequencer called each ms when mode is CW
 void cw_sequencer( uint16_t val ){                             // call with val == 0x8000 to key tx, 0 for key up
 static uint16_t cw_seq;                                        // cw sent behind by 16 ms, avoid sending during relay switching
 static uint16_t mod;                                           // counter for semi breakin
 
    if( cw_practice ){
-       if( transmitting ) rx();                                // entered practice mode while transmitting
+       if( transmitting ) rx();                                // someone entered practice mode while transmitting
        return;                                                 // practice only keys the sidetone
    }
    
@@ -1695,7 +1662,7 @@ void tx(){
 
   transmitting = 1;
   
-  if( vfo_mode & VFO_CW ){                  // turn off the IF and Prod detector mixers
+  if( vfo_mode & VFO_CW ){                  // turn off the IF and Prod detector mixers 
      si5351bx_setfreq( 0, 0 );
      si5351bx_setfreq( 1, 0 );
      si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now, vfo B is always the tx vfo
@@ -1713,8 +1680,8 @@ int read_paddles(){                    // keyer function
 int pdl;
 
    pdl = digitalReadFast( DAH_pin ) << 1;
- //  pdl += digitalReadFast( DIT_pin );  !!! this pin is floating currently ???  stuck low maybe, disconnected? maybe
-   pdl |= 1;    // !!! disable the dit pin  
+ //  pdl += digitalReadFast( DIT_pin );  !!! this pin is floating currently ???  stuck low maybe, disconnected maybe
+ pdl |= 1;    // !!! disable the dit pin  
 
    pdl ^= 3;                                                // make logic positive
    if( key_swap ){ 
