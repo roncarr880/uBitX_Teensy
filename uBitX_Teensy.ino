@@ -30,8 +30,8 @@
  *       Receive Audio to the speaker/headphones using PWM to the SPK on the audio connector. Suspect speaker volume will be low, headphone  
  *       volume will be loud. Receive audio will also be sent to USB for DIGI modes. 
  *       
- *    CW key jack:  remove the pullup resistor to 5 volts.  replace the DIT series resistor with 10 ohm.  Wire PTT from the MIC jack 
- *       over to the DAH contact on the key jack.  Remove the series resistor for DAH.  Keyer works as DIT, PTT as DAH.
+ *    CW key jack:  replace the DIT series resistor R3 with 10 ohm.  Wire PTT from the MIC jack  over to the DAH contact on the key jack.  
+ *       Remove the series resistor R2.  Keyer works with digital signals, KEYER and PTT as DIT and DAH.
  *    
  *    
  *    Values from standard radio,  the PLL remains fixed.
@@ -50,7 +50,6 @@
  *    Will break out the VFO from this scheme so that it uses the unused PLL and even dividers for maybe lower jitter.
  *      Maybe can run a divider of 12.  900/12 = 75.  600/12 = 50.  48*12 = 575 - so 80 meters runs PLL slightly out of spec.
  *      The existing Si5351 scheme seems to work ok, may not implement this idea.  
- *      Also have listen on 160m and 630m - but still PLL only down to 540 meg for receive. 
  *      
  *      ATU board.   An ATU-100 mini clone from uSDX SOTA radio.
  *        Probably will want to run the I2C through a level converter and run the PIC on the ATU at 5 volts.   
@@ -59,10 +58,8 @@
  *        Maybe can separate 5 volt runs so the PIC can run with the relays off, relays only on during TX like the rest of the radio.
  *          Or would need to use I2C to tell ATU to set the relays. 
  *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
- *        
- *      Mount the finals differently, on some thin wood maybe?
- *        Saw one picture where someone mounted them to the case bottom with TO220 insulated mounting setup. 
- *      Need to rotate the speaker away from the Teensy/ATU.  Puts the vent holes above the screen 5 volt regulator.
+ *         
+ *      May Need to rotate the speaker away from the Teensy/ATU.  Puts the vent holes above the screen 5 volt regulator.
  *      Top cover 1/4 inch higher may be needed for the ATU.
  *        
  *      Could construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
@@ -78,37 +75,46 @@
  *      Implemented basic control of the receiving functions, mode, band switching.
  *      Added 160 meters to the band stack.  Can listen there, would need an external filter to try transmitting.
  *      Added a USA license class indicator to show when in a ham band and what class license is needed to transmit.
- *        Did not implement for 160 meters.
  *      Added some frequency presets to the 60 meter menu - 630 meters, some ssb aircraft frequencies.
  *      Added rudimentary CAT control using Argonaut V protocol.  Can fix any inaccuracies as needed. 
  *      Added TR switching.
  *      Added a keyer with TR sequencing.  Avoids sending while the relays are switching.  No sidetone yet. 
  *      Added a keyer mode submenu. Mode A, Mode B, Straight, Ultimatic 
- *      Added some touch targets to the hidden menu.  Touch area is much larger than the targets.
+ *      Added some touch targets to the hidden menu.  Touch area is much larger than the targets.  Hidden menu no longer hidden.
  *      Added a multi function menu where values are changed with the encoder. ( keyer speed for example )
  *      Added a toogles menu where values are turned on and off ( swap keyer Dit and Dah for example )
- *      Tried the idea of different cw power levels using the Si5351 drive levels 2,4,6,8, ma.  No change in output power.
- *      Re-wired Teensy pins 3,4 for use with the PWM library object.
+ *      Tried the idea of different cw power levels using the Si5351 drive levels 2,4,6,8, ma.  No change in output power so removed. 
+ *      Re-wired some pins on the Teensy adapter making Teensy pins 3,4 available for use with the PWM library object.
+ *      Wiring changes for the key jack, R2 removed, R3 replaced with 10 ohm, PTT jumpered to the Key jack for DAH.
+ *        Jumper pin PTT on MIC jack to same pin on the Key Jack.  PTT is the etch run that goes directly to pin 2 on connector.
+ *      Added audio library elements.  Compile for USB type Serial,Midi,Audio.   
+ *      Removed the LM386 and converted to Digital audio.  USB receive audio works.
+ *      Enabled TX USB audio for DIGI mode in tx() function.  It seems I wired the tx level pot backwards, CCW increases the tx drive.
+ *      Added a fine tune clarify to help with frequency drift due to temperature changes. 
+ *      Added PWM filter for headphone audio, 10n and 4.7mh.
+ *      A/D may be quieter without connecting Analog ground to Digital ground.
  *      
  *      
  *  To do.    
  *      Low power tune mode using low amplitude sidetone - DAC output into MIC
- *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 may be useful.  They seem to be 11 meg mixed with the
- *        transmit frequency.  Didn't measure how high they are.  From Groups IO, maybe the mixing is in the final IRF510's.
- *        Didn't see any on 80 meters. 11-4 11+4 so think they may be filtered with the low pass filter.
+ *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 or TP14 may be useful.  Not much room there. 
+ *        Scope FFT on TP13 and TP14 to see if have any 11 meg signal there.  Could use Scope FFT to see what stage the spurs appear. 
+ *        They seem to be 11 meg mixed with the transmit frequency.  Didn't measure how high they are.  
+ *        From Groups IO, maybe the mixing is in the final IRF510's.
+ *        Didn't see any on 80 meters.
  *        20 meters seem to be a multi mix with spurs at +- 2.4.
  *        30 meters +- 0.9
  *        40 meters +- 3.8
- *        15 meters one at 10.0    10 meters one at 17.8
+ *        15 meters one at 10.0   
+ *        10 meters one at 17.8
  *      Terminal Mode.
- *      The touch calibration is from a previous project, seems to be working ok but could be reviewed.
- *      Audio design using the Teensy Audio tool.
- *      Change VFO to use PLLB and even divider.  Not sure this is needed.  Seems to work fine as is. 
- *      Convert to DSP audio.
- *      AM detector, carrier at 2.8k tone. 
+ *      The touch calibration is from a previous project, seems to be working ok but could be reviewed. 
+ *      AM detector, carrier at 2.8k tone.
+ *      DIGI drive level per band, watch for increase in spurious with increased drive, aim for 5 watts?
  *      CW decoder.   Hell decoder.
  *      Audio scope, audio FFT displays.
  *      Noise reduction, auto notch.
+ *      Order a bunch of T37 red,yellow,-43,binoc.
  *      CW filters.
  *      Debounce PTT needed? Maybe a short latch up timer between the functions tx() rx(), minimum tx on time. 
  *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time. 
@@ -163,7 +169,7 @@
 #include <SPI.h>
 #include "led_fonts.h"
 
-#define BFO 11059590L          // !!! must match number in ubitx_si5351, for now defined in two separate places
+#define BFO 11059590L          // this puts the bfo on the high side of the filter, sharper cutoff?
 #define IF  45000000L          // what is the actual center of the IF?
 
          //  4bpp pallett  0-3, 4-7, 8-11, 12-15
@@ -177,14 +183,68 @@ const uint16_t EGA[] = {
 #define TFT_DC  9
 #define TFT_CS 10
 ILI9341_t3 tft = ILI9341_t3(TFT_CS, TFT_DC);
-XPT2046_Touchscreen ts(8);         
+XPT2046_Touchscreen ts(8);
+
+/*****************************   Audio Library **********************************/
+
+#include <Audio.h>
+
+// Added peak object for signal level 
+// GUItool: begin automatically generated code
+AudioSynthWaveformSine   SideTone;          //xy=175,170
+AudioInputUSB            usb1;           //xy=176,257
+AudioInputAnalog         VOL_M;           //xy=179,110
+AudioMixer4              RX_SEL;         //xy=340,176
+AudioMixer4              TX_SEL;         //xy=341,258
+AudioAnalyzePeak         peak1;          //xy=351,51
+AudioOutputPWM           SPK;           //xy=490,177
+AudioOutputAnalog        MIC;           //xy=490,259
+AudioOutputUSB           usb2;           //xy=493,105
+AudioConnection          patchCord1(SideTone, 0, RX_SEL, 1);
+AudioConnection          patchCord2(SideTone, 0, TX_SEL, 0);
+AudioConnection          patchCord3(usb1, 0, TX_SEL, 1);
+AudioConnection          patchCord4(VOL_M, 0, usb2, 0);
+AudioConnection          patchCord5(VOL_M, 0, usb2, 1);
+AudioConnection          patchCord6(VOL_M, 0, RX_SEL, 0);
+AudioConnection          patchCord7(VOL_M, peak1);
+AudioConnection          patchCord8(RX_SEL, SPK);
+AudioConnection          patchCord9(TX_SEL, MIC);
+// GUItool: end automatically generated code
+
+/*
+#include <Audio.h>
+//#include <Wire.h>
+//#include <SPI.h>
+//#include <SD.h>
+//#include <SerialFlash.h>
+
+// Digital Audio with no processing. A/D VOL_M to usb, A/D VOL_M to PWM SPK, usb to DAC MIC.  Sidetone to SPK and/or MIC.
+// GUItool: begin automatically generated code
+AudioSynthWaveformSine   SideTone;          //xy=175,170
+AudioInputUSB            usb1;           //xy=176,257
+AudioInputAnalog         VOL_M;           //xy=179,110
+AudioMixer4              RX_SEL;         //xy=340,176
+AudioMixer4              TX_SEL;         //xy=341,258
+AudioOutputPWM           SPK;           //xy=490,177
+AudioOutputAnalog        MIC;           //xy=490,259
+AudioOutputUSB           usb2;           //xy=493,105
+AudioConnection          patchCord1(SideTone, 0, RX_SEL, 1);
+AudioConnection          patchCord2(SideTone, 0, TX_SEL, 0);
+AudioConnection          patchCord3(usb1, 0, TX_SEL, 1);
+AudioConnection          patchCord4(VOL_M, 0, usb2, 0);
+AudioConnection          patchCord5(VOL_M, 0, usb2, 1);
+AudioConnection          patchCord6(VOL_M, 0, RX_SEL, 0);
+AudioConnection          patchCord7(RX_SEL, SPK);
+AudioConnection          patchCord8(TX_SEL, MIC);
+// GUItool: end automatically generated code
+*/
 
 /*******************************************************************************/
 // globals
 
 // Implementing a simplistic split tuning model.
 //   VFO A is the receive vfo, VFO B is the transmit vfo, split is used for RIT
-//   Can listen on VFO B, if selected split is also selected.  If transmit, listen vfo returns to VFO A.
+//   Can listen on VFO B, if split is also selected.
 //   VFO B follows VFO A unless split is enabled.
 //   B --> A exit split with VFO B selected.   A --> B exit spit with VFO A selected.
 //  encoder switch  tap = enable split A selected (RIT), tap then toogles B or A vfo, long press B to A or A to B as above.
@@ -207,7 +267,7 @@ uint8_t  vfo_mode = VFO_A + VFO_LSB;
 int band = 3;                          // 40 meters
 
 int transmitting;                      // status of TR
-int     cw_tr_delay = 65;              // semi breakin time, in multi fun, actual value is *10 ms.
+int      cw_tr_delay = 65;             // semi breakin time, in multi fun, actual value is *10 ms.
 int      fast_tune = 1;                // double tap encoder to toggle
 uint8_t  cat_tx;                       // a flag that CAT is in control of the transmitter
 
@@ -222,7 +282,9 @@ uint8_t key_mode = ULTIMATIC;
 int     cw_practice = 1;               // toggle and multi fun variables must be int, have value 0 to 99.
 int     key_swap = 0;
 int     wpm = 14;
-uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack
+int     volume_ = 10;                  // actual * 0.1   Digital gain range 0 to 10
+int     clari  = 50;                   // adjustment for temperature changes, maps to +-50 hz
+uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack.  Don't transmit.
 
 
 //   Touch menu's
@@ -320,16 +382,16 @@ struct BAND_STACK {
   uint8_t   relay;
 };
 
-  // don't set up any splits unless set VFO_SPLIT in the mode, else tx on the wrong freq until tune away from the start freq.
+  // don't set up any splits here
 struct BAND_STACK band_stack[10] = {
   {  1875000,  1875000, VFO_A+VFO_LSB, 4 },      // can listen on 160 meters, tx has harmonics and spur
   {  3928000,  3928000, VFO_A+VFO_LSB, 4 },      // relay C  for 80 and 60 meters
   {  6000000,  6000000, VFO_A+VFO_USB, 4 },
-  {  7168000,  7168000, VFO_A+VFO_LSB, 2 },            // relay B
+  {  7168000,  7168000, VFO_A+VFO_LSB, 2 },      // relay B
   { 10106000, 10106000, VFO_A+VFO_USB, 2 },
-  { 14200000, 14076000, VFO_B+VFO_DIGI+VFO_SPLIT, 1 },  // relay A
+  { 14200000, 14200000, VFO_A+VFO_USB, 1 },      // relay A
   { 18100000, 18100000, VFO_A+VFO_DIGI, 1 },
-  { 21100000, 21100000, VFO_A+VFO_CW, 0 },             // default lowpass
+  { 21100000, 21100000, VFO_A+VFO_CW, 0 },       // default lowpass
   { 24900000, 24900000, VFO_A+VFO_USB, 0 },
   { 28250000, 28250000, VFO_A+VFO_USB, 0 }
 };
@@ -342,6 +404,8 @@ struct multi {                         // all multi variables type int, function
    int current;                        // adjusting this one now
 };
 
+const char mf_vl[] = " Volume";
+const char mf_bf[] = " Clarify";       // +- 50 hz for drift due to temperature
 const char mf_ks[] = " Key Spd";
 const char mf_tr[] = " cwDelay";       // 0-99 maps to 0 to 990 ms, min value is 100
 // const char mf_sv[] = " SideVol";       // sidetone volume
@@ -349,9 +413,9 @@ const char mf_tr[] = " cwDelay";       // 0-99 maps to 0 to 990 ms, min value is
 
 struct multi multi_fun_data = {
    " Multi Adj  (exit)",
-   2,
-   { mf_ks, mf_tr },
-   { &wpm, &cw_tr_delay },
+   4,
+   { mf_vl, mf_bf, mf_ks, mf_tr },
+   { &volume_, &clari, &wpm, &cw_tr_delay },
    0
 };
 
@@ -375,6 +439,7 @@ uint8_t  screen_owner = DECODE;
 
 extern void initOscillators();
 extern void si5351bx_setfreq(uint8_t clknum, uint32_t fout);
+//extern void si5351_set_calibration( int32_t cal );
 
 /*****************************************************************************************/
 
@@ -397,9 +462,9 @@ void setup() {
   pinMode( ENC_A,   INPUT_PULLUP );
   pinMode( ENC_B,   INPUT_PULLUP );
   pinMode( ENC_SW,  INPUT_PULLUP );
-  pinMode( DIT_pin, INPUT );             // !!! wiring changes needed, then use INPUT_PULLUP
-  //pinMode( DAH_Pin, INPUT );             //      !!! currently have pullup to 5 volts on DIT_pin
-  pinMode( PTT,     INPUT_PULLUP );      // redundant with dah depending upon wiring
+  pinMode( DIT_pin, INPUT_PULLUP );      // R2 removed, R3 replaced with 10 ohm ( zero to 100 works )
+  //pinMode( DAH_Pin, INPUT_PULLUP );    // connected to PTT
+  pinMode( PTT,     INPUT_PULLUP );      // DAH and PTT connected together with wire on side 2
 
 
   tft.begin();
@@ -422,6 +487,7 @@ void setup() {
   Wire.begin();                             // I2C_OP_MODE_DMA, I2C_OP_MODE_ISR possible options.
   Wire.setClock(400000);
   initOscillators();                        // sets bfo
+  si5351bx_setfreq( 0, BFO );               // set new bfo if changed from the default
 //  si5351bx_setfreq( 1, 33948600 );          // set LSB mode
 //  si5351bx_setfreq( 1, 56061400 );          // set LSB mode
   si5351bx_setfreq( 1, IF + BFO );          // set LSB mode
@@ -433,6 +499,31 @@ void setup() {
   mf_bar_disp();
   
   menu_dispatch = &hidden_menu;             // function pointer for screen touch
+
+  // audio library setup
+
+    AudioNoInterrupts();
+    AudioMemory(40);
+
+    SideTone.frequency(600);
+    SideTone.amplitude( 0.0 );          // maybe can set this to default and just gate in the _SEL objects with whatever gain desired
+                                        // have two possible places to set the level
+
+    RX_SEL.gain(0,1.0);                 // listen to Receive audio 
+    RX_SEL.gain(1,0.0);                 // sidetone muted
+    RX_SEL.gain(2,0.0);                 // unused
+    RX_SEL.gain(3,0.0);                 // unused
+
+    TX_SEL.gain(0,0.0);                 // low power tuning mode using sidetone
+    TX_SEL.gain(1,0.0);                 // USB audio tx for DIGI mode
+    TX_SEL.gain(2,0.0);                 // unused
+    TX_SEL.gain(3,0.0);                 // unused
+
+    MIC.analogReference(INTERNAL);      // 1.2 volt p-p
+
+
+    AudioInterrupts();
+  
 
 }
 
@@ -465,7 +556,28 @@ int t2;
 
    radio_control();                         // CAT
    check_ptt();
+   if( screen_owner == DECODE ) signal_peak();
    
+}
+
+void signal_peak(){
+static uint32_t tm;                                // slow down the display
+float val;
+
+    if( millis() - tm < 500 ) return;
+    if( peak1.available() == 0 ) return;
+    tm = millis();
+
+    tft.setTextSize( 2 );
+    tft.setTextColor(EGA[15], EGA[1] );
+    tft.setCursor( 120, 180 );
+    val = (float)AudioProcessorUsage() / 100.0 ;
+    tft.print( val );
+    tft.setCursor( 50, 180 );
+    val = peak1.read();
+    if( val > 0.98 ) tft.setTextColor( EGA[12], EGA[1] );
+    else if( val > 0.90 ) tft.setTextColor( EGA[14], EGA[1] );
+    tft.print( val );
 }
 
 
@@ -579,7 +691,7 @@ int selection;
      selection = touch_decode( t, 40 );
      if( selection == -1 || selection >= multi_fun_data.num ){       // stay in menu, only exit when touch exit
         // check limits on some variables
-        wpm = constrain( wpm, 10, 40 );                              // avoid divide by zero
+        wpm = constrain( wpm, 10, 50 );                              // avoid divide by zero
         cw_tr_delay = constrain( cw_tr_delay, 10, 99 );              // min tr delay of 100ms max 990
         menu_cleanup();
         return;
@@ -770,7 +882,7 @@ static uint8_t   z;
    return 0;
 }
 
-void multi_display( struct multi *m, int clr ){           // display name value pairs      // use also for toggles ?
+void multi_display( struct multi *m, int clr ){           // display name value pairs.   use also for toggles
 int i,x,y; 
 char buf[20];
 
@@ -823,6 +935,20 @@ int *p;
      tft.setCursor( x,y);
      if( *p < 10 ) tft.write(' ');
      tft.print(*p);
+
+     switch( i ){                                       // immediate adjustment needed?
+        case 0: set_volume( volume_ ); break;           // digital audio gain
+        case 1:                                         // fine tune 25 meg adjustment for temp drift
+           vfo_freq_disp();                             // new tuning values loaded
+        break;
+     }
+}
+
+void set_volume(int vol){                // !!! how will AGC interact with this
+float g;                                 // !!! probably will adjust volume at tail end of processing after AGC
+                                         // !!! not at the front end like this
+  g = 0.1 * (float)vol;                  // 0 to 99 mapped to 0.0 to 9.9
+  RX_SEL.gain(0,g);
 }
 
 void menu_display( struct menu *m, int mode_hack ){    // display any of the menus on the screen, special highlighting for the mode menu
@@ -971,6 +1097,7 @@ static int holdoff;                                            // notch tuning a
 static int rpm;
 static uint32_t tm;
 static int rc;
+uint32_t va, vb;
 //static int last_count;
 
   if( count ) ++rc;
@@ -1002,7 +1129,6 @@ static int rc;
       if( (vfo_b % 100) == 0 && abs(count) < 100 ) holdoff = 5;     // rx tuning notch at 100 hz steps for fine tuning
       count = vfo_b % count;
       vfo_b -= count;                                               // clear not counting digits
-      band_check( vfo_b );                                          // check if tuning to next band, relays may change
   }
   else{
       vfo_a += count;
@@ -1010,9 +1136,13 @@ static int rc;
       if( (vfo_a % 100) == 0 && abs(count) < 100 ) holdoff = 5;     // rx tuning notch at 100 hz steps for fine tuning
       count = vfo_a % count;
       vfo_a -= count;                                               // clear not counting digits
-      band_check( vfo_a );
   }
 
+  va = vfo_a;   vb = vfo_b;                                         // band check may change the vfo's if tune across bands rather than
+                                                                    // switch bands with menu. Will see mode changes to the new band.
+  band_check( vfo_b );                                              // check that the tx vfo is in the correct band, the correct tx relays
+                                                                    // selected
+  vfo_a = va;   vfo_b = vb;
   vfo_freq_disp();
   
 }
@@ -1035,7 +1165,7 @@ char bp;
 
    if( vfo_mode & VFO_SPLIT ) cb = 12;    // vfo b is active transmit
 
-   si5351bx_setfreq(2, vfo + IF);           // !!! not a good spot for this? but we do know which vfo is in use here
+   si5351bx_setfreq( 2, vfo + IF + ( clari - 50 ));
 
    if( screen_owner != DECODE ) return;
                           
@@ -1228,13 +1358,14 @@ int32_t as;
 char band_priv( int band,  uint32_t f ){
 char r = 'X';
 
-   // skipping 160 meters for now, adjust band to match this code
-   --band;
    
-   if( band != 1 ) f = f / 1000;             // test 1k steps
+   if( band != 2 ) f = f / 1000;             // test 1k steps
    else f = f / 100;                         // 60 meters, test 500hz steps
    switch( band ){                           // is there an easy way to do this.  This seems like the hard way.
        case 0:
+          if( f >= 1800 && f <= 2000 ) r = 'G';
+       break;   
+       case 1:
           if( f >= 3500 && f <= 4000 ){
              if( f < 3525 ) r = 'e';
              else if( f < 3600 ) r = 'g';
@@ -1243,7 +1374,7 @@ char r = 'X';
              else r = 'G';
           }
        break;
-       case 1:
+       case 2:
           if( (vfo_mode & VFO_USB) || (vfo_mode & VFO_DIGI) ){
              if( f == 53305 || f == 53465 || f == 53570 || f == 53715 || f == 54035 ) r = 'G';
           }
@@ -1251,7 +1382,7 @@ char r = 'X';
              if( f == 53320 || f == 53480 || f == 53585 || f == 53730 || f == 54050 ) r = 'g'; 
           }
        break;
-       case 2:
+       case 3:
           if( f >= 7000 && f <= 7300 ){
              if( f < 7025 ) r = 'e';
              else if ( f < 7125 ) r = 'g';
@@ -1259,10 +1390,10 @@ char r = 'X';
              else r = 'G';
           }
        break;
-       case 3:
+       case 4:
           if( f >= 10100 && f <= 10150 ) r = 'g';
        break;
-       case 4:
+       case 5:
           if( f >= 14000 && f <= 14350 ){
              if( f < 14025 ) r = 'e';
              else if( f < 14150 ) r = 'g';
@@ -1271,13 +1402,13 @@ char r = 'X';
              else r = 'G';
           }
        break;
-       case 5:
+       case 6:
           if( f >= 18068 && f <= 18168 ){
              if( f < 18110 ) r = 'g';
              else r = 'G';
           }
        break;
-       case 6:
+       case 7:
           if( f >= 21000 && f <= 21450 ){
              if( f < 21025 ) r = 'e';
              else if( f < 21200 ) r = 'g';
@@ -1286,13 +1417,13 @@ char r = 'X';
              else r = 'G';
           }
        break;
-       case 7:
+       case 8:
          if( f >= 24890 && f <= 24990 ){
             if( f < 24930 ) r = 'g';
             else r = 'G';
          }
        break;
-       case 8:
+       case 9:
          if( f >= 28000 && f <= 29700 ){
             if( f < 28300 ) r = 'g';
             else r = 'G';
@@ -1566,14 +1697,21 @@ char cmd2;
 
 // function stubs for cat calls
 void cat_qsy( uint32_t freq ){       // test if a band change is needed
+int t;
 
-   band_check( freq );
-   if( vfo_mode & VFO_A ) vfo_a = freq;
-   else vfo_b = freq;
+   t = band_check( freq );
+   if( vfo_mode & VFO_A ){
+      vfo_a = freq;
+      if( t ) vfo_b = freq;          // cross band split not allowed
+   }
+   else{
+      vfo_b = freq;
+      if( t ) vfo_a = freq;
+   }
    vfo_freq_disp();
 }
 
-void band_check( uint32_t freq ){
+int band_check( uint32_t freq ){
 
 int i = 0;
 
@@ -1586,7 +1724,11 @@ int i = 0;
    if( freq  > 20000000 ) i = 7;
    if( freq  > 23000000 ) i = 8;
    if( freq  > 27000000 ) i = 9;
-   if( i != band ) band_change(i);
+   if( i != band ){
+       band_change(i);
+       return 1;
+   }
+   return 0;
   
 }
 
@@ -1652,13 +1794,21 @@ void rx(){
   if( vfo_mode & VFO_CW ){
      si5351bx_setfreq( 1, IF + BFO );                // CW is on LSB mode
      si5351bx_setfreq( 0, BFO );
-     if( vfo_mode & VFO_B ) si5351bx_setfreq(2, vfo_b + IF );
-     else si5351bx_setfreq( 2, vfo_a + IF );
+     if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+     else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
   }
+  TX_SEL.gain(0,0.0);                                // Turn off USB TX audio and Sidetone tune audio
+  TX_SEL.gain(1,0.0);
+  
 }
 
 // what needs to happen to enter tx mode
 void tx(){
+
+  if( oob ){                                // disable tx out of band.   WSJT freq changes can leave vfo_b out of band.
+     rx();                                  // Works for band change, can be issue if change is in the current band, only
+     return;                                // changes the VFO A.
+  }
 
   transmitting = 1;
   
@@ -1666,6 +1816,9 @@ void tx(){
      si5351bx_setfreq( 0, 0 );
      si5351bx_setfreq( 1, 0 );
      si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now, vfo B is always the tx vfo
+  }
+  if( vfo_mode & VFO_DIGI ){                // !!! will need to add tune mode and select sidetone here instead of USB audio
+     TX_SEL.gain(1,1.0);                    // turn on the USB audio for TX   !!! add usb tx power per band settings
   }
 
   digitalWriteFast( TR, HIGH );
@@ -1680,8 +1833,8 @@ int read_paddles(){                    // keyer function
 int pdl;
 
    pdl = digitalReadFast( DAH_pin ) << 1;
- //  pdl += digitalReadFast( DIT_pin );  !!! this pin is floating currently ???  stuck low maybe, disconnected maybe
- pdl |= 1;    // !!! disable the dit pin  
+   pdl += digitalReadFast( DIT_pin );
+   // pdl |= 1;    // !!! disable the dit pin  
 
    pdl ^= 3;                                                // make logic positive
    if( key_swap ){ 

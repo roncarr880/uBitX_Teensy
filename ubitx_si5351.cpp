@@ -41,7 +41,7 @@
 #define SI5351BX_XTALPF 2               // 1:6pf  2:8pf  3:10pf
 
 // If using 27mhz crystal, set XTAL=27000000, MSA=33.  Then vco=891mhz
-#define SI5351BX_XTAL 25005400          // Crystal freq in Hz
+#define SI5351BX_XTAL 25005265          // Crystal freq in Hz  5290 wwv at 25mhz cool temps
 #define SI5351BX_MSA  35                // VCOA is at 25mhz*35 = 875mhz
 
 // User program may have reason to poke new values into these 3 RAM variables
@@ -69,7 +69,8 @@ void i2cWriten(uint8_t reg, uint8_t *vals, uint8_t vcnt) {  // write array
 
 
 void si5351bx_init() {                  // Call once at power-up, start PLLA
-  uint8_t reg;  uint32_t msxp1;
+  //uint8_t reg;
+  uint32_t msxp1;
   //Wire.begin();
   i2cWrite(149, 0);                     // SpreadSpectrum off
   i2cWrite(3, si5351bx_clken);          // Disable all CLK output drivers
