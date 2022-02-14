@@ -59,7 +59,6 @@
  *          Or would need to use I2C to tell ATU to set the relays. 
  *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
  *         
- *      May Need to rotate the speaker away from the Teensy/ATU.  Puts the vent holes above the screen 5 volt regulator.
  *      Top cover 1/4 inch higher may be needed for the ATU.
  *        
  *      Could construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
@@ -93,6 +92,8 @@
  *      Added a fine tune clarify to help with frequency drift due to temperature changes. 
  *      Added PWM filter for headphone audio, 10n and 4.7mh.
  *      A/D may be quieter without connecting Analog ground to Digital ground.
+ *      Added some TX/RX sequencing to the PTT function.  Relays and bi-directional amps take somewhere between 32 and 42 ms to switch.
+ *      Added a tune toggle for the to be installed auto tuner.
  *      
  *      
  *  To do.    
@@ -284,6 +285,7 @@ int     key_swap = 0;
 int     wpm = 14;
 int     volume_ = 10;                  // actual * 0.1   Digital gain range 0 to 10
 int     clari  = 50;                   // adjustment for temperature changes, maps to +-50 hz
+int     tuning;                        // low power tune via sidetone object
 uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack.  Don't transmit.
 
 
@@ -421,13 +423,14 @@ struct multi multi_fun_data = {
 
 const char tt_ks[] = "Key Swap";
 const char tt_kp[] = "Practice";
-const char tt_ft[] = "FastTune";
+const char tt_ft[] = "Fast Vfo";
+const char tt_tt[] = "ATU TUNE";
 
 struct multi toggles_data = {
    " Toggle Values",
-   3,
-   { tt_ks, tt_kp, tt_ft },
-   { &key_swap, &cw_practice, &fast_tune },
+   4,
+   { tt_ks, tt_kp, tt_ft, tt_tt },
+   { &key_swap, &cw_practice, &fast_tune, &tuning },
    2
 };
 
@@ -552,12 +555,39 @@ int t2;
       t2 = button_state(0);
       if( t2 > DONE ) button_process(t2);
       if( vfo_mode & VFO_CW ) keyer();
+      if( tuning ) tune();
    }
 
    radio_control();                         // CAT
    check_ptt();
    if( screen_owner == DECODE ) signal_peak();
    
+}
+
+#define TUNE_OFF 10000
+void tune(){          // enable a low power tune signal via DAC and SideTone object.  Sequence and timeout.
+                      // called once per millisecond
+    ++tuning;
+    if( tuning < 0 ) tuning = TUNE_OFF;
+    switch( tuning ){
+        case  2:
+           si5351bx_setfreq( 2, 0 );          // vfo off for relay switch
+           tx();
+        break;
+        case 48:                              // enable the sidetone after relays have switched
+           si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+           SideTone.frequency(1500);
+           SideTone.amplitude(0.95);
+           TX_SEL.gain(0,0.6);                // !!! what should the gain per band be? !!! interacts with MIC level also
+        break;
+        case TUNE_OFF:                        // timeout at nn seconds
+           rx();
+           tuning = 0;
+        break;
+        default:                              // check if have 1:1 match and end early ?
+        break;
+    }
+  
 }
 
 void signal_peak(){
@@ -708,7 +738,8 @@ int *p;
      if( selection != -1 && selection < toggles_data.num ){ 
         toggles_data.current = selection;
         p = toggles_data.val[selection];
-        *p ^= 1;   
+        if( *p > 10 ) *p = -10;                     // a hack to have a turn off toggle for tuning as it increments once enabled
+        else *p ^= 1;   
      }
      menu_cleanup();
   
@@ -1779,10 +1810,22 @@ static uint16_t mod;                                           // counter for se
 
 void check_ptt(){
 
-  if( cat_tx || (vfo_mode & VFO_CW) ) return;                   // it's not my job
+  if( cat_tx || (vfo_mode & VFO_CW) || tuning ) return;          // it's not my job
 
-  if( transmitting && digitalReadFast( PTT ) == HIGH ) rx();
-  if( transmitting == 0 && digitalReadFast( PTT ) == LOW ) tx();
+  if( transmitting == 0 && digitalReadFast( PTT ) == LOW ){      // enable transmit, ssb with microphone
+     si5351bx_setfreq( 2, 0);                                    // add some sequencing to ptt for relay switching, clock off
+     tx();                                                       // enable tx
+     delay( 48 );                                                // relay switching time, somewhere between 32 and 42 ms
+     si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));          // transmit mixer enabled
+  }
+
+  if( transmitting && digitalReadFast( PTT ) == HIGH ){
+     si5351bx_setfreq( 2, 0);
+     rx();
+     delay( 48 );
+     if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+     else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
+  }
   
 }
 
@@ -1791,14 +1834,24 @@ void rx(){
 
   transmitting = 0;
   digitalWriteFast( TR, LOW );
-  if( vfo_mode & VFO_CW ){
-     si5351bx_setfreq( 1, IF + BFO );                // CW is on LSB mode
+  if( vfo_mode &  VFO_CW ){                                // return to RX vfo now, but not for SSB using PTT
+     si5351bx_setfreq( 1, IF + BFO );                      // CW is on LSB mode
      si5351bx_setfreq( 0, BFO );
      if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
      else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
   }
+  if( tuning || (vfo_mode & VFO_DIGI) ){
+     if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+     else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );    
+  }
+  
   TX_SEL.gain(0,0.0);                                // Turn off USB TX audio and Sidetone tune audio
   TX_SEL.gain(1,0.0);
+  
+}
+
+  //  time a 48ms delay between TX to RX and RX to TX switching
+tx_rx_seq(){
   
 }
 
@@ -1806,19 +1859,21 @@ void rx(){
 void tx(){
 
   if( oob ){                                // disable tx out of band.   WSJT freq changes can leave vfo_b out of band.
-     rx();                                  // Works for band change, can be issue if change is in the current band, only
-     return;                                // changes the VFO A.
+     rx();
+     return;
   }
 
   transmitting = 1;
-  
-  if( vfo_mode & VFO_CW ){                  // turn off the IF and Prod detector mixers 
+
+  if( tuning ) ;                            // do nothing, setups done elsewhere
+  else if( vfo_mode & VFO_CW ){             // turn off the IF and Prod detector mixers for cw
      si5351bx_setfreq( 0, 0 );
      si5351bx_setfreq( 1, 0 );
-     si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now, vfo B is always the tx vfo
+     si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now at 600, vfo B is always the tx vfo
   }
-  if( vfo_mode & VFO_DIGI ){                // !!! will need to add tune mode and select sidetone here instead of USB audio
+  else if( vfo_mode & VFO_DIGI ){
      TX_SEL.gain(1,1.0);                    // turn on the USB audio for TX   !!! add usb tx power per band settings
+     si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
   }
 
   digitalWriteFast( TR, HIGH );
@@ -1925,3 +1980,5 @@ uint16_t seq;             // sequencer bit.  0x8000 or 0
    cw_sequencer( seq );                       // add a bit to the delay line each ms
   
 }
+
+/*****************************************************************/
