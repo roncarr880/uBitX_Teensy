@@ -94,10 +94,10 @@
  *      A/D may be quieter without connecting Analog ground to Digital ground.
  *      Added some TX/RX sequencing to the PTT function.  Relays and bi-directional amps take somewhere between 32 and 42 ms to switch.
  *      Added a tune toggle for the to be installed auto tuner.
+ *      Re-wrote all the tx/rx sequencing to use a common function.  CW is now 64 ms behind sidetone.  
  *      
  *      
  *  To do.    
- *      Low power tune mode using low amplitude sidetone - DAC output into MIC
  *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 or TP14 may be useful.  Not much room there. 
  *        Scope FFT on TP13 and TP14 to see if have any 11 meg signal there.  Could use Scope FFT to see what stage the spurs appear. 
  *        They seem to be 11 meg mixed with the transmit frequency.  Didn't measure how high they are.  
@@ -556,6 +556,7 @@ int t2;
       if( t2 > DONE ) button_process(t2);
       if( vfo_mode & VFO_CW ) keyer();
       if( tuning ) tune();
+      if( transmitting ) tx_rx_seq();       // 48 ms delays for TX RX switching
    }
 
    radio_control();                         // CAT
@@ -571,18 +572,17 @@ void tune(){          // enable a low power tune signal via DAC and SideTone obj
     if( tuning < 0 ) tuning = TUNE_OFF;
     switch( tuning ){
         case  2:
-           si5351bx_setfreq( 2, 0 );          // vfo off for relay switch
            tx();
         break;
-        case 48:                              // enable the sidetone after relays have switched
-           si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+        case 50:                              // enable the sidetone after relays have switched
+          // si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 )); handled in tx sequencer
            SideTone.frequency(1500);
            SideTone.amplitude(0.95);
            TX_SEL.gain(0,0.6);                // !!! what should the gain per band be? !!! interacts with MIC level also
         break;
         case TUNE_OFF:                        // timeout at nn seconds
-           rx();
            tuning = 0;
+           rx();
         break;
         default:                              // check if have 1:1 match and end early ?
         break;
@@ -1784,18 +1784,40 @@ void status_display(){
 // transmit control from different sources: Keyer, PTT, CAT
 // wish to sequence the keyer to avoid short first elements and transmitting during relay switching
 
+  //  time a 48ms delay between TX to RX and RX to TX switching, call once per ms
+  //  relays and bi-directional amps need to switch
+void tx_rx_seq(){
+
+     if( transmitting < 50 ) ++transmitting;
+     
+     if( transmitting > 0 ){                                            // changing from RX to TX
+        if( transmitting == 48 ){
+           if( vfo_mode & VFO_CW ) si5351bx_setfreq( 2, vfo_b - 600 );
+           else si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ) );
+        }
+     }
+     else{                           // TX to RX
+        if( transmitting == 0 ){
+           if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+           else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
+        }
+     } 
+}
+
+
+
 // sequencer called each ms when mode is CW
-void cw_sequencer( uint16_t val ){                             // call with val == 0x8000 to key tx, 0 for key up
-static uint16_t cw_seq;                                        // cw sent behind by 16 ms, avoid sending during relay switching
+void cw_sequencer( uint64_t val ){                             // call with val == 0x8000000000000000 to key tx, 0 for key up
+static uint64_t cw_seq;                                        // cw sent behind by 64 ms, avoid sending during relay switching
 static uint16_t mod;                                           // counter for semi breakin
 
    if( cw_practice ){
-       if( transmitting ) rx();                                // someone entered practice mode while transmitting
+       if( transmitting > 0 ) rx();                            // someone entered practice mode while transmitting
        return;                                                 // practice only keys the sidetone
    }
    
    cw_seq >>= 1;
-   cw_seq |= val;                                              // save a bit to send 16ms later
+   cw_seq |= val;                                              // save a bit to send 64 ms later
    if( cw_seq ) mod = 10*cw_tr_delay;                          // still sending
 
    if( cw_seq & 1 ) digitalWriteFast( CW_KEY, HIGH);           // key cw on and off
@@ -1803,8 +1825,8 @@ static uint16_t mod;                                           // counter for se
    
    if( mod ) --mod;                                            // delay the return to rx mode
 
-   if( mod && transmitting == 0 ) tx();                        // turn the transmitter on and off
-   if( transmitting && mod == 0 ) rx();
+   if( mod && transmitting <= 0 ) tx();                        // turn the transmitter on and off, tx overrides return to rx mode
+   if( transmitting > 0 && mod == 0 ) rx();
 
 }
 
@@ -1813,18 +1835,11 @@ void check_ptt(){
   if( cat_tx || (vfo_mode & VFO_CW) || tuning ) return;          // it's not my job
 
   if( transmitting == 0 && digitalReadFast( PTT ) == LOW ){      // enable transmit, ssb with microphone
-     si5351bx_setfreq( 2, 0);                                    // add some sequencing to ptt for relay switching, clock off
      tx();                                                       // enable tx
-     delay( 48 );                                                // relay switching time, somewhere between 32 and 42 ms
-     si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));          // transmit mixer enabled
   }
 
-  if( transmitting && digitalReadFast( PTT ) == HIGH ){
-     si5351bx_setfreq( 2, 0);
+  if( transmitting > 40 && digitalReadFast( PTT ) == HIGH ){     // 40 ms debounce as well as sequencing
      rx();
-     delay( 48 );
-     if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
-     else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
   }
   
 }
@@ -1832,28 +1847,20 @@ void check_ptt(){
 // what needs to happen to return to rx mode
 void rx(){
 
-  transmitting = 0;
+  transmitting = -48;                                      // sequence delay 48 ms
+  si5351bx_setfreq( 2, 0 );                                // tx off, vfo off
   digitalWriteFast( TR, LOW );
-  if( vfo_mode &  VFO_CW ){                                // return to RX vfo now, but not for SSB using PTT
+  
+  if( vfo_mode &  VFO_CW ){                                // enable the bfo and IF now
      si5351bx_setfreq( 1, IF + BFO );                      // CW is on LSB mode
      si5351bx_setfreq( 0, BFO );
-     if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
-     else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
-  }
-  if( tuning || (vfo_mode & VFO_DIGI) ){
-     if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
-     else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );    
   }
   
-  TX_SEL.gain(0,0.0);                                // Turn off USB TX audio and Sidetone tune audio
+  TX_SEL.gain(0,0.0);                                // Turn off DIGI USB TX audio and Sidetone tune audio
   TX_SEL.gain(1,0.0);
   
 }
 
-  //  time a 48ms delay between TX to RX and RX to TX switching
-tx_rx_seq(){
-  
-}
 
 // what needs to happen to enter tx mode
 void tx(){
@@ -1864,16 +1871,15 @@ void tx(){
   }
 
   transmitting = 1;
+  si5351bx_setfreq( 2, 0 );            // vfo off for rx to tx switch
 
-  if( tuning ) ;                            // do nothing, setups done elsewhere
+  if( tuning ) ;                            // do nothing
   else if( vfo_mode & VFO_CW ){             // turn off the IF and Prod detector mixers for cw
      si5351bx_setfreq( 0, 0 );
      si5351bx_setfreq( 1, 0 );
-     si5351bx_setfreq( 2, vfo_b - 600 );    // cw offset fixed for now at 600, vfo B is always the tx vfo
   }
   else if( vfo_mode & VFO_DIGI ){
-     TX_SEL.gain(1,1.0);                    // turn on the USB audio for TX   !!! add usb tx power per band settings
-     si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
+     TX_SEL.gain(1,1.0);                    // turn on the USB audio for DIGI TX  !!! add power per band setting
   }
 
   digitalWriteFast( TR, HIGH );
@@ -1930,7 +1936,7 @@ static int nel;           // next element - memory
 static int arm;           // edge triggered memory mask
 static int iam;           // level triggered iambic mask
 int pdl;
-uint16_t seq;             // sequencer bit.  0x8000 or 0
+uint64_t seq;             // sequencer bit. 0x8000 0000 0000 0000 or 0
 
    pdl = read_paddles();
    if( count ) --count;
@@ -1943,7 +1949,7 @@ uint16_t seq;             // sequencer bit.  0x8000 or 0
         if( cel == DIT + DAH ) cel = DIT;
         if( cel == 0 ) break;
         if( key_mode == STRAIGHT ){        // straight key stays in state 0
-            seq = 0xf000;                  // 4ms debounce enough?
+            seq = 0xf000000000000000;     // 4ms debounce enough?
             break;
         }
         iam = (DIT+DAH) ^ cel;
@@ -1956,10 +1962,10 @@ uint16_t seq;             // sequencer bit.  0x8000 or 0
         if( cel == DAH ) count *= 3;
         state = 1;
         side_tone_on();
-        seq = 0x8000;                         // put a bit in the sequencer delay line
+        seq = 0x8000000000000000;                   // put a bit in the sequencer delay line
      break; 
      case 1:                                  // timing the current element. look for edge of the other paddle
-        seq = 0x8000;                         // assume still sending
+        seq = 0x8000000000000000;            // assume still sending
         if( count ) nel = ( nel ) ? nel : pdl & arm;
         else{
            count = 1200/wpm;
