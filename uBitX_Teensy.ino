@@ -58,8 +58,7 @@
  *        Maybe can separate 5 volt runs so the PIC can run with the relays off, relays only on during TX like the rest of the radio.
  *          Or would need to use I2C to tell ATU to set the relays. 
  *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
- *         
- *      Top cover 1/4 inch higher may be needed for the ATU.
+ *        Top cover 1/4 inch higher may be needed for space to mount the ATU.
  *        
  *      Could construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
  *        Use the Teensy audio shield.  Ordered a Softrock with K2 IF, about 4.914 mhz.  Can receive using the IQ DSP and transmit using 
@@ -95,9 +94,12 @@
  *      Added some TX/RX sequencing to the PTT function.  Relays and bi-directional amps take somewhere between 32 and 42 ms to switch.
  *      Added a tune toggle for the to be installed auto tuner.
  *      Re-wrote all the tx/rx sequencing to use a common function.  CW is now 64 ms behind sidetone.  
+ *      Note: Library object PWM only works when cpu speed is 48 or 96.  For the T3.2 that is underclocked or overclocked.
+ *      Added cw sidetone.  Audio muting during TX. 
  *      
  *      
  *  To do.    
+ *      Wire analog ground with a jumper block so can connect or disconnect the analog ground to digital ground.
  *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 or TP14 may be useful.  Not much room there. 
  *        Scope FFT on TP13 and TP14 to see if have any 11 meg signal there.  Could use Scope FFT to see what stage the spurs appear. 
  *        They seem to be 11 meg mixed with the transmit frequency.  Didn't measure how high they are.  
@@ -117,7 +119,6 @@
  *      Noise reduction, auto notch.
  *      Order a bunch of T37 red,yellow,-43,binoc.
  *      CW filters.
- *      Debounce PTT needed? Maybe a short latch up timer between the functions tx() rx(), minimum tx on time. 
  *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time. 
  *      Work with the ATU.  Mounting, add inductors, firmware. Kind of a separate project. 
  *      Some pictures for documentation.
@@ -286,6 +287,7 @@ int     wpm = 14;
 int     volume_ = 10;                  // actual * 0.1   Digital gain range 0 to 10
 int     clari  = 50;                   // adjustment for temperature changes, maps to +-50 hz
 int     tuning;                        // low power tune via sidetone object
+int side_vol = 10;                     // sidetone volume
 uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack.  Don't transmit.
 
 
@@ -410,14 +412,14 @@ const char mf_vl[] = " Volume";
 const char mf_bf[] = " Clarify";       // +- 50 hz for drift due to temperature
 const char mf_ks[] = " Key Spd";
 const char mf_tr[] = " cwDelay";       // 0-99 maps to 0 to 990 ms, min value is 100
-// const char mf_sv[] = " SideVol";       // sidetone volume
+const char mf_sv[] = " SideVol";       // sidetone volume
 // PWM audio volume
 
 struct multi multi_fun_data = {
    " Multi Adj  (exit)",
-   4,
-   { mf_vl, mf_bf, mf_ks, mf_tr },
-   { &volume_, &clari, &wpm, &cw_tr_delay },
+   5,
+   { mf_vl, mf_bf, mf_ks, mf_tr, mf_sv },
+   { &volume_, &clari, &wpm, &cw_tr_delay, &side_vol },
    0
 };
 
@@ -1858,6 +1860,8 @@ void rx(){
   
   TX_SEL.gain(0,0.0);                                // Turn off DIGI USB TX audio and Sidetone tune audio
   TX_SEL.gain(1,0.0);
+
+  set_volume( volume_ );
   
 }
 
@@ -1870,8 +1874,9 @@ void tx(){
      return;
   }
 
+  set_volume( 0 );                          // mute rx
   transmitting = 1;
-  si5351bx_setfreq( 2, 0 );            // vfo off for rx to tx switch
+  si5351bx_setfreq( 2, 0 );                 // vfo off for rx to tx switch
 
   if( tuning ) ;                            // do nothing
   else if( vfo_mode & VFO_CW ){             // turn off the IF and Prod detector mixers for cw
@@ -1881,7 +1886,7 @@ void tx(){
   else if( vfo_mode & VFO_DIGI ){
      TX_SEL.gain(1,1.0);                    // turn on the USB audio for DIGI TX  !!! add power per band setting
   }
-
+ 
   digitalWriteFast( TR, HIGH );
 
 }
@@ -1909,18 +1914,17 @@ int pdl;
 
 void side_tone_on(){
 
-//  SideTone.frequency(700);
-//  SideTone.amplitude(side_gain);
-//  Volume.gain(0,0.0);
-//  Volume.gain(3,af_gain);   // or make this a constant to remove volume setting from the sidetone adjustment
-//  if( cw_practice == 0 ) tx();
+   SideTone.frequency(600);
+   SideTone.amplitude(0.95);
+   RX_SEL.gain(0,0.0);
+   RX_SEL.gain(1,((float)side_vol)/100.0);
 }
 
 void side_tone_off(){
 
-//  Volume.gain(3,0.0);
-//  if( transmitting ) rx();
-//  Volume.gain(0,af_gain);
+   SideTone.amplitude(0.0);
+   RX_SEL.gain(1,0.0);
+   if( cw_practice ) set_volume(volume_);
 }
 
 
@@ -1949,7 +1953,7 @@ uint64_t seq;             // sequencer bit. 0x8000 0000 0000 0000 or 0
         if( cel == DIT + DAH ) cel = DIT;
         if( cel == 0 ) break;
         if( key_mode == STRAIGHT ){        // straight key stays in state 0
-            seq = 0xf000000000000000;     // 4ms debounce enough?
+            seq = 0xf000000000000000;      // 4ms debounce enough?
             break;
         }
         iam = (DIT+DAH) ^ cel;
