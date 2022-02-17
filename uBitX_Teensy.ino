@@ -96,7 +96,11 @@
  *      Added a tune toggle for the to be installed auto tuner.
  *      Re-wrote all the tx/rx sequencing to use a common function.  CW is now 64 ms behind sidetone.  
  *      Note: Library object PWM only works when cpu speed is 48 or 96.  For the T3.2 that is underclocked or overclocked.
- *      Added cw sidetone. And audio muting during TX. 
+ *      Added cw sidetone. And audio muting during TX.
+ *      Added a more complicated audio library model for current and planned features.
+ *      Implemented an AM detector. AM is tuned off frequency and the carrier tone at 2600hz is used to demodulated the audio using rectifier.
+ *        It is followed with a highpass to restore the dc level and a lowpass to try to filter out the 2600 hz tone.
+ *        Maybe could try a higher IF by changing the BFO?  Carrier at 11k maybe. Audio from 7k to 11k.  Open up the audio filter. 
  *      
  *      
  *  To do.
@@ -881,11 +885,11 @@ int selection;
         break;                                            // always can toggle with double tap encoder
         case 4:  vfo_mode &= 0x7;
                  vfo_mode |= VFO_USB;
-                 fast_tune = 1;
+                 //fast_tune = 1;                         // not sure I like this feature
         break;
         case 5:  vfo_mode &= 0x7;
                  vfo_mode |= VFO_LSB;
-                 fast_tune = 1;
+                 //fast_tune = 1;
         break;         
         case 6:  vfo_mode &= 0x7;
                  vfo_mode |= VFO_AM;   
@@ -898,7 +902,37 @@ int selection;
    //qsy_mode( current, mode_menu_data.current );   
    }
    
-   menu_cleanup(); 
+   menu_cleanup();
+   set_bandwidth();
+}
+
+void set_bandwidth(){           // set a filter appropriate for the mode
+  // Q's two cascade
+  // 0.54119610
+  // 1.3065630
+  // three cascade
+  // 0.51763809
+  // 0.70710678
+  // 1.9318517
+  // four cascade
+  // 0.50979558
+  // 0.60134489
+  // 0.89997622
+  // 2.5629154
+
+   if( vfo_mode & VFO_AM ){                         // aggressive lowpass to help remove some of the carrier at 2600
+      BandWidth.setHighpass( 0, 200, 0.70710678 );  // highpass to restore dc level
+      BandWidth.setLowpass( 1, 2400, 0.51763809 );
+      BandWidth.setLowpass( 2, 2400, 0.70710678 );
+      BandWidth.setLowpass( 3, 2400, 1.9318517 );
+   }
+   else{                                            // default wide filter, crystal filter should be setting the bandwidth
+      BandWidth.setHighpass( 0, 200, 0.70710678 );  
+      BandWidth.setLowpass( 1, 3300, 0.51763809 );
+      BandWidth.setLowpass( 2, 3300, 0.70710678 );
+      BandWidth.setLowpass( 3, 3300, 1.9318517 );    
+   }
+  
 }
 
 void menu_cleanup(){
@@ -910,6 +944,7 @@ void menu_cleanup(){
    vfo_mode_disp();
    vfo_freq_disp();
    mf_bar_disp();
+   set_volume( volume_ );
 }
 
 void mf_bar_disp(){                 // display a bar on left side to show a menu exists there
@@ -1032,11 +1067,21 @@ int *p;
      }
 }
 
-void set_volume(int vol){                // !!! how will AGC interact with this
-float g;                                 // !!! probably will adjust volume at tail end of processing after AGC
-                                         // !!! not at the front end like this
+void set_volume(int vol){
+float g;
+int sel;
+int i;
+
+  sel = 0;                               // assume normal SSB DIGI
+  if( vfo_mode & VFO_AM ) sel = 3;
+  // else if notch/nr sel = 2;
   g = 0.1 * (float)vol;                  // 0 to 99 mapped to 0.0 to 9.9
-  RX_SEL.gain(0,g);
+  RX_SEL.gain(sel,g);
+  
+  for( i = 0; i < 4; ++i ){              // turn off other volume sources
+    if( i == sel ) continue;
+    RX_SEL.gain(i, 0.0 );
+  }
 }
 
 void menu_display( struct menu *m, int mode_hack ){    // display any of the menus on the screen, special highlighting for the mode menu
@@ -1240,6 +1285,7 @@ uint32_t va, vb;
 void vfo_freq_disp(){
 //int val;
 int32_t vfo;
+int32_t am_off;
 //int pos;           // sceen x position
 //int32_t mult;
 int ca,cb;         // colors
@@ -1253,7 +1299,8 @@ char bp;
 
    if( vfo_mode & VFO_SPLIT ) cb = 12;    // vfo b is active transmit
 
-   si5351bx_setfreq( 2, vfo + IF + ( clari - 50 ));
+   am_off = ( vfo_mode & VFO_AM ) ? -2600 : 0;                  // tune AM off frequency to pass carrier at 2600 hz and USB
+   si5351bx_setfreq( 2, vfo + IF + ( clari - 50 ) + am_off);
 
    if( screen_owner != DECODE ) return;
                           
@@ -1828,8 +1875,9 @@ void mode_change( int i ){
   if( i == 1 ) vfo_mode |= VFO_USB;
   if( i == 2 ) vfo_mode |= VFO_LSB;
   if( i == 3 ) vfo_mode |= VFO_CW;
-  if( i == 4 ) vfo_mode |= VFO_DIGI;
-  
+  if( i == 4 ) vfo_mode |= VFO_DIGI;     // FM maps to DIGI
+  set_volume( volume_ );
+  set_bandwidth();
 }
 
 void status_display(){
