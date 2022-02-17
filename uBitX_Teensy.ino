@@ -15,6 +15,7 @@
  *        installed correctly - the back of the metal tab will be up with the body of the 7805 about covering the via where 3.3 volts was 
  *        wired.  Have the 7805 a little off the board so it doesn't heat the wire we just put on side 2. I pop riveted a small piece of
  *        aluminium to the 7805 for some extra heat sinking.
+ *      Remove R2, a pullup to 5 volts on signal KEYER. 
  *      Mark the board for 3.3 volt operation. The Nano can no longer be used with this Raduino.  Test with a current limiting supply, a  
  *      worn out 9 volt battery from a smoke detector works.  Power up with no processor, no screen.  Short out the 3.3 volt run to protect 
  *      the Si5351 in case the 7805 is in backwards.  It should draw about 3 ma.  Test that the 5 volt net has 5 volts.  Insert the screen 
@@ -95,12 +96,14 @@
  *      Added a tune toggle for the to be installed auto tuner.
  *      Re-wrote all the tx/rx sequencing to use a common function.  CW is now 64 ms behind sidetone.  
  *      Note: Library object PWM only works when cpu speed is 48 or 96.  For the T3.2 that is underclocked or overclocked.
- *      Added cw sidetone.  Audio muting during TX. 
+ *      Added cw sidetone. And audio muting during TX. 
  *      
  *      
- *  To do.    
+ *  To do.
+ *      IS there still a pullup to 5 volts on the KEYER signal on the Raduino?   Remove if so.   R2. 
  *      Wire analog ground with a jumper block so can connect or disconnect the analog ground to digital ground.
  *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 or TP14 may be useful.  Not much room there. 
+ *        Farhan says move L5 and L7 to side two - signal feedback to the 45 meg filter. This would be a simple fix. 
  *        Scope FFT on TP13 and TP14 to see if have any 11 meg signal there.  Could use Scope FFT to see what stage the spurs appear. 
  *        They seem to be 11 meg mixed with the transmit frequency.  Didn't measure how high they are.  
  *        From Groups IO, maybe the mixing is in the final IRF510's.
@@ -128,8 +131,9 @@
 // Wiring  ( not easy with Nano upside down )  Teensy mounted with USB on the other side for the shortest wiring to the display.
 //  Teensy mounted upside right.
 //  Special wiring will be A2, and maybe A3 for audio input.  A2 wired to VOL-M via the circuit shown in Audio Library for A/D input.
-//    The DAC pin wired to MIC via some caps and a pot for level.   DAC-cap-pot-cap-MIC.
+//    The DAC pin wired to MIC via some caps and a pot for level.   DAC-1k-cap-500 ohm pot-cap-1k-MIC.  Caps 6.8 or 10 uf.
 //    Pins  D3, D4 wired to SPK via the circuit shown in the Audio Library for PWM output.  LM386 removed from the socket. 
+//       4.7 mh added in series with the SPK for better filtering.  60 inches of wire on FT37-43. ( a little over 100 turns )
 //    The Teensy audio library will control these 5 pins.
 //  ILI9341 wired for standard SPI as outlined on Teensy web site and it matches the Nano wiring pin for pin
 //    Uses pins 8 to 13 wired to Nano pins 8 to 13
@@ -165,9 +169,10 @@
 
 #include <ILI9341_t3.h>
 #include <XPT2046_Touchscreen.h>
-//#include <Audio.h>
 //#include <Wire.h>
 #include <i2c_t3.h>            // non-blocking wire library
+//  There are control files in the audio library where include Wire.h will need to be replaced with include i2c_t3.h.  ( 7 total ? )
+//  Or maybe Wire.h will work ok with this program instead of i2c_t3 if desired. 
 #include <SPI.h>
 #include "led_fonts.h"
 
@@ -191,6 +196,53 @@ XPT2046_Touchscreen ts(8);
 
 #include <Audio.h>
 
+// Audio processing model with AGC, AM detector, CW detector and other dummy objects for NR Notch and Decoders
+// An issue with this model is the AGC loop is outside of the bandwidth object.
+//   If outside the bandwidth object, strong signals outside of the desired bandwidth will cause the desired signal to decrease in volume.
+//   If AGC loop includes the bandwidth object, strong signals outside of the desired bandwidth could overload the earlier stages.
+//     Solution is two separate agc loops which is perhaps a bit complicated for this radio.
+//       1st agc loop prevents overload, 2nd sets the desired listening volume.
+//   The chosen implementation will only have an issue with narrow bandwidth modes like CW on a very busy band. 
+// GUItool: begin automatically generated code
+AudioInputAnalog         VOL_M;           //xy=223.30557250976562,286.52777099609375
+AudioAnalyzePeak         peak1;          //xy=347.2500190734863,161.13887405395508
+AudioOutputUSB           usb2;           //xy=348.13885498046875,207.36110305786133
+AudioAmplifier           AGC;           //xy=397.77777099609375,286.3888854980469
+AudioMixer4              NR_Notch;         //xy=450,357.2221984863281
+AudioInputUSB            usb1;           //xy=477.52777099609375,192.5555419921875
+AudioAnalyzeRMS          rms1;           //xy=479.16668701171875,234.72219848632812
+AudioSynthWaveformSine   SideTone;          //xy=481.11114501953125,147.5
+AudioEffectRectifier     AM_Det;       //xy=538.75,411.25
+AudioMixer4              RX_SEL;         //xy=629.9999389648438,307.6666564941406
+AudioMixer4              TX_SEL;         //xy=691.27783203125,181.61109924316406
+AudioAmplifier           amp2;           //xy=778.75,410
+AudioFilterBiquad        BandWidth;        //xy=801.666748046875,307.08331298828125
+AudioMixer4              Decoders;         //xy=862.5,240.138916015625
+AudioAnalyzeToneDetect   CW_Det;          //xy=917.5,410
+AudioOutputAnalog        MIC;           //xy=994.166748046875,181.361083984375
+AudioOutputPWM           SPK;           //xy=994.444580078125,306.3055419921875
+AudioConnection          patchCord1(VOL_M, 0, usb2, 0);
+AudioConnection          patchCord2(VOL_M, 0, usb2, 1);
+AudioConnection          patchCord3(VOL_M, peak1);
+AudioConnection          patchCord4(VOL_M, AGC);
+AudioConnection          patchCord5(AGC, 0, NR_Notch, 0);
+AudioConnection          patchCord6(AGC, 0, RX_SEL, 0);
+AudioConnection          patchCord7(AGC, AM_Det);
+AudioConnection          patchCord8(AGC, rms1);
+AudioConnection          patchCord9(NR_Notch, 0, RX_SEL, 2);
+AudioConnection          patchCord10(usb1, 0, TX_SEL, 1);
+AudioConnection          patchCord11(SideTone, 0, RX_SEL, 1);
+AudioConnection          patchCord12(SideTone, 0, TX_SEL, 0);
+AudioConnection          patchCord13(AM_Det, 0, RX_SEL, 3);
+AudioConnection          patchCord14(RX_SEL, BandWidth);
+AudioConnection          patchCord15(TX_SEL, MIC);
+AudioConnection          patchCord16(amp2, CW_Det);
+AudioConnection          patchCord17(BandWidth, amp2);
+AudioConnection          patchCord18(BandWidth, 0, Decoders, 0);
+AudioConnection          patchCord19(BandWidth, SPK);
+// GUItool: end automatically generated code
+
+/*
 // Added peak object for signal level 
 // GUItool: begin automatically generated code
 AudioSynthWaveformSine   SideTone;          //xy=175,170
@@ -212,7 +264,7 @@ AudioConnection          patchCord7(VOL_M, peak1);
 AudioConnection          patchCord8(RX_SEL, SPK);
 AudioConnection          patchCord9(TX_SEL, MIC);
 // GUItool: end automatically generated code
-
+*/
 /*
 #include <Audio.h>
 //#include <Wire.h>
@@ -511,13 +563,12 @@ void setup() {
     AudioMemory(40);
 
     SideTone.frequency(600);
-    SideTone.amplitude( 0.0 );          // maybe can set this to default and just gate in the _SEL objects with whatever gain desired
-                                        // have two possible places to set the level
+    SideTone.amplitude( 0.0 );
 
     RX_SEL.gain(0,1.0);                 // listen to Receive audio 
     RX_SEL.gain(1,0.0);                 // sidetone muted
-    RX_SEL.gain(2,0.0);                 // unused
-    RX_SEL.gain(3,0.0);                 // unused
+    RX_SEL.gain(2,0.0);                 // NR Notch
+    RX_SEL.gain(3,0.0);                 // AM mode
 
     TX_SEL.gain(0,0.0);                 // low power tuning mode using sidetone
     TX_SEL.gain(1,0.0);                 // USB audio tx for DIGI mode
@@ -525,6 +576,10 @@ void setup() {
     TX_SEL.gain(3,0.0);                 // unused
 
     MIC.analogReference(INTERNAL);      // 1.2 volt p-p
+
+    AGC.gain( 1.0 );                    // default signal pass through until agc loop takes over
+    BandWidth.setHighpass( 0, 200, 0.707 );
+    BandWidth.setLowpass( 1, 3200, 0.707 );
 
 
     AudioInterrupts();
@@ -1735,7 +1790,8 @@ int t;
    t = band_check( freq );
    if( vfo_mode & VFO_A ){
       vfo_a = freq;
-      if( t ) vfo_b = freq;          // cross band split not allowed
+      if( t || (vfo_mode & VFO_SPLIT ) == 0 ) vfo_b = freq;    // cross band split not allowed
+                                                               // transmit vfo follows rx vfo when not split
    }
    else{
       vfo_b = freq;
