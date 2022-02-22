@@ -440,20 +440,21 @@ struct BAND_STACK {
   uint32_t  vfob;
   uint8_t   mode;
   uint8_t   relay;
+  float     digi_pwr;                            // TX_SEL gain for 5 watts out at 12.5 volts VCC, 15,12,10 lower power.
 };
 
   // don't set up any splits here
 struct BAND_STACK band_stack[10] = {
-  {  1875000,  1875000, VFO_A+VFO_LSB, 4 },      // can listen on 160 meters, tx has harmonics and spur
-  {  3928000,  3928000, VFO_A+VFO_LSB, 4 },      // relay C  for 80 and 60 meters
-  {  6000000,  6000000, VFO_A+VFO_USB, 4 },
-  {  7168000,  7168000, VFO_A+VFO_LSB, 2 },      // relay B
-  { 10106000, 10106000, VFO_A+VFO_USB, 2 },
-  { 14200000, 14200000, VFO_A+VFO_USB, 1 },      // relay A
-  { 18100000, 18100000, VFO_A+VFO_DIGI, 1 },
-  { 21100000, 21100000, VFO_A+VFO_CW, 0 },       // default lowpass
-  { 24900000, 24900000, VFO_A+VFO_USB, 0 },
-  { 28250000, 28250000, VFO_A+VFO_USB, 0 }
+  {  1875000,  1875000, VFO_A+VFO_LSB, 4, 0.00 },      // can listen on 160 meters, tx has harmonics and spur
+  {  3928000,  3928000, VFO_A+VFO_LSB, 4, 0.60 },      // relay C  for 80 and 60 meters
+  {  6000000,  6000000, VFO_A+VFO_USB, 4, 0.70 },
+  {  7168000,  7168000, VFO_A+VFO_LSB, 2, 0.85 },      // relay B
+  { 10106000, 10106000, VFO_A+VFO_USB, 2, 0.80 },
+  { 14200000, 14200000, VFO_A+VFO_USB, 1, 0.75 },      // relay A
+  { 18100000, 18100000, VFO_A+VFO_DIGI, 1, 0.80 },
+  { 21100000, 21100000, VFO_A+VFO_CW, 0, 0.99 },       // default lowpass
+  { 24900000, 24900000, VFO_A+VFO_USB, 0, 0.99 },
+  { 28250000, 28250000, VFO_A+VFO_USB, 0, 0.99 }
 };
 
 struct multi {                         // all multi variables type int, functions that use them to map to floats if needed
@@ -626,7 +627,7 @@ int t2;
    
 }
 
-#define TUNE_OFF 10000
+#define TUNE_OFF 10000       // 10000 is 10 seconds
 void tune(){          // enable a low power tune signal via DAC and SideTone object.  Sequence and timeout.
                       // called once per millisecond
     ++tuning;
@@ -638,8 +639,9 @@ void tune(){          // enable a low power tune signal via DAC and SideTone obj
         case 50:                              // enable the sidetone after relays have switched
           // si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 )); handled in tx sequencer
            SideTone.frequency(1500);
-           SideTone.amplitude(0.95);
-           TX_SEL.gain(0,0.6);                // !!! what should the gain per band be? !!! interacts with MIC level also
+           SideTone.amplitude(0.99);
+           TX_SEL.gain(0,0.25);                // set mic level for 15 meters, not sure it is in a linear range
+           //TX_SEL.gain(0,(float)side_vol/100.0);    // !!! testing only, side_vol is the audio sidetone during CW tx
         break;
         case TUNE_OFF:                        // timeout at nn seconds
            tuning = 0;
@@ -920,11 +922,11 @@ void set_bandwidth(){           // set a filter appropriate for the mode
   // 0.89997622
   // 2.5629154
 
-   if( vfo_mode & VFO_AM ){                         // aggressive lowpass to help remove some of the carrier at 2600
+   if( vfo_mode & VFO_AM ){
       BandWidth.setHighpass( 0, 200, 0.70710678 );  // highpass to restore dc level
-      BandWidth.setLowpass( 1, 2400, 0.51763809 );
-      BandWidth.setLowpass( 2, 2400, 0.70710678 );
-      BandWidth.setLowpass( 3, 2400, 1.9318517 );
+      BandWidth.setLowpass( 1, 3000, 0.61763809 );  // favor high freq tone
+      BandWidth.setLowpass( 2, 3000, 0.70710678 );
+      BandWidth.setLowpass( 3, 3000, 1.9318517 );
    }
    else{                                            // default wide filter, crystal filter should be setting the bandwidth
       BandWidth.setHighpass( 0, 200, 0.70710678 );  
@@ -1299,7 +1301,7 @@ char bp;
 
    if( vfo_mode & VFO_SPLIT ) cb = 12;    // vfo b is active transmit
 
-   am_off = ( vfo_mode & VFO_AM ) ? -2600 : 0;                  // tune AM off frequency to pass carrier at 2600 hz and USB
+   am_off = ( vfo_mode & VFO_AM ) ? -1500 : 0;                  // tune AM off frequency to pass carrier at 5-8 khz
    si5351bx_setfreq( 2, vfo + IF + ( clari - 50 ) + am_off);
 
    if( screen_owner != DECODE ) return;
@@ -1431,13 +1433,17 @@ int32_t as;
    if( vfo_mode & VFO_CW ) c = 10, as = 1;       // CW on LSB
    if( vfo_mode & VFO_LSB ) l = 10, as = 1;      // LSB on LSB
    if( vfo_mode & VFO_USB ) u = 10;
-   if( vfo_mode & VFO_AM )  m = 10;              // AM through the filter on USB, tune 3 k off frequency down, 
-                                                 // get carrier at 3k audio + lower sideband for the decoder.  Will this work?
+   if( vfo_mode & VFO_AM )  m = 10;              // AM through the filter on USB, tune 1.5 k off frequency down, 
+                                                 // get carrier at 4.5k +- 1k
 
-   si5351bx_setfreq( 1, IF + as*BFO );           // !!! not sure I like having radio setups in the display code but currently it is the 
+   si5351bx_setfreq( 1, IF + as*BFO );           // not sure I like having radio setups in the display code but currently it is the 
                                                  // common place where all code branches merge.  Also we know what the mode is here.
                                                  // what is the actual center of the 1st IF freq?  Notes say it is low due to loading but
                                                  // the standard code sets it at 45005000
+   if( vfo_mode & VFO_AM ){
+      si5351bx_setfreq( 0, BFO + 3500 );         // tune AM to pass 3.5k to 6.5k IF.  Think C78 across volume pot may be reducing volume if 
+   }                                             // try higher IF frequencies. 
+   else si5351bx_setfreq(0, BFO );               // normal bfo on high side of the filter
                                                  
    if( screen_owner != DECODE ) return;          // make sure screen owner is changed before this call when exiting menu's
 
@@ -1898,7 +1904,7 @@ void tx_rx_seq(){
      
      if( transmitting > 0 ){                                            // changing from RX to TX
         if( transmitting == 48 ){
-           if( vfo_mode & VFO_CW ) si5351bx_setfreq( 2, vfo_b - 600 );
+           if( (vfo_mode & VFO_CW) && tuning == 0 ) si5351bx_setfreq( 2, vfo_b - 600 );
            else si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ) );
         }
      }
@@ -1988,7 +1994,7 @@ void tx(){
      si5351bx_setfreq( 1, 0 );
   }
   else if( vfo_mode & VFO_DIGI ){
-     TX_SEL.gain(1,1.0);                    // turn on the USB audio for DIGI TX  !!! add power per band setting
+     TX_SEL.gain(1,band_stack[band].digi_pwr);   // turn on the USB audio for DIGI TX
   }
  
   digitalWriteFast( TR, HIGH );
