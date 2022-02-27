@@ -98,14 +98,18 @@
  *      Note: Library object PWM only works when cpu speed is 48 or 96.  For the T3.2 that is underclocked or overclocked.
  *      Added cw sidetone. And audio muting during TX.
  *      Added a more complicated audio library model for current and planned features.
- *      Implemented an AM detector. AM is tuned off frequency and the carrier tone at 2600hz is used to demodulated the audio using rectifier.
- *        It is followed with a highpass to restore the dc level and a lowpass to try to filter out the 2600 hz tone.
- *        Maybe could try a higher IF by changing the BFO?  Carrier at 11k maybe. Audio from 7k to 11k.  Open up the audio filter. 
+ *      Implemented an AM detector. AM is tuned off frequency and the recified. 
+ *        It is followed with a highpass to restore the dc level and a lowpass to try to filter out the carrier.
+ *        Ended up with tuning the BFO off frequency to pass the AM signal at an audio IF of 3.5 to 6.5 or thereabouts.
+ *      Removed R2 on the Raduino.  I think all signals are now 3.3 volts and safe for a Teensy 4.1 for future experiments.   
+ *      Wired a jumper for analog ground.  Can see if signals are better with or without connecting the grounds.
+ *      Added DIGI drive level per band.  Set for output of 5 watts at 12.5 volts.  Set tune power to 25% approximately 1 watt.
+ *        Power out is lower on 15, 12 and 10 meters. 
+ *      Wired up the ATU.  PIC16F1938 out of stock for 1 year.  PIC18F2220 has I2C on different pins, other pins look ok.  
+ *        May try I2C bitbang at reduced speed of 50k.  PIC at 8 meg clock has 2 instuctions per us, 20 per clock change at 50k. 
  *      
  *      
- *  To do.
- *      IS there still a pullup to 5 volts on the KEYER signal on the Raduino?   Remove if so.   R2. 
- *      Wire analog ground with a jumper block so can connect or disconnect the analog ground to digital ground.
+ *  To do. 
  *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 or TP14 may be useful.  Not much room there. 
  *        Farhan says move L5 and L7 to side two - signal feedback to the 45 meg filter. This would be a simple fix. 
  *        Scope FFT on TP13 and TP14 to see if have any 11 meg signal there.  Could use Scope FFT to see what stage the spurs appear. 
@@ -119,15 +123,12 @@
  *        10 meters one at 17.8
  *      Terminal Mode.
  *      The touch calibration is from a previous project, seems to be working ok but could be reviewed. 
- *      AM detector, carrier at 2.8k tone.
- *      DIGI drive level per band, watch for increase in spurious with increased drive, aim for 5 watts?
  *      CW decoder.   Hell decoder.
- *      Audio scope, audio FFT displays.
+ *      Audio scope, audio FFT displays.  Band scope by scanning? ( mute, scan one freq, return vfo, unmute )
  *      Noise reduction, auto notch.
- *      Order a bunch of T37 red,yellow,-43,binoc.
  *      CW filters.
- *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time. 
- *      Work with the ATU.  Mounting, add inductors, firmware. Kind of a separate project. 
+ *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time.  
+ *      ATU firmware. 
  *      Some pictures for documentation.
 */         
 
@@ -181,7 +182,7 @@
 #include "led_fonts.h"
 
 #define BFO 11059590L          // this puts the bfo on the high side of the filter, sharper cutoff?
-#define IF  45000000L          // what is the actual center of the IF?
+#define IF  45000000L          // what is the actual center of the IF.  Testing says 45k even is about right.
 
          //  4bpp pallett  0-3, 4-7, 8-11, 12-15
 const uint16_t EGA[] = { 
@@ -619,6 +620,8 @@ int t2;
       if( vfo_mode & VFO_CW ) keyer();
       if( tuning ) tune();
       if( transmitting ) tx_rx_seq();       // 48 ms delays for TX RX switching
+
+     // test_1st_IF();                        // find the center of the 45mhz filter. Seems 45k about right.
    }
 
    radio_control();                         // CAT
@@ -2102,3 +2105,50 @@ uint64_t seq;             // sequencer bit. 0x8000 0000 0000 0000 or 0
 }
 
 /*****************************************************************/
+#ifdef NOWAY
+// a test to find the center of the 45 mhz filter, call once per ms
+
+void test_1st_IF(){
+static int tm;
+int32_t off;
+int i;
+int mi = 0;
+float mp = 0.0;
+float val;
+static float vals[40];
+
+     // run once per second 
+     ++tm;
+     if( tm < 1000 ) return;
+     tm = 0;
+     
+     peak1.read();
+     for( i = 0; i < 40; ++i ){
+        off = -20000 + 1000 * i;
+        si5351bx_setfreq(2, vfo_a + IF + off );
+        si5351bx_setfreq(1, IF + off - BFO );      // usb
+        while( peak1.available() == 0 );
+        //Serial.print( i );    Serial.write( ' ' );  Serial.println( peak1.read() );
+        val = peak1.read();
+        vals[i] += val;
+        si5351bx_setfreq(1, IF + off + BFO );      // lsb
+        while( peak1.available() == 0 );
+        val = peak1.read();
+        vals[i] += val;    
+     }
+     for( i = 0; i < 40; ++i ){                    // find highest, index zero may have some of the normal signal so discard
+        if( i != 0 && vals[i] > mp ){
+          mi = i;
+          mp = vals[i];
+        }
+     }
+     Serial.print( mi ); 
+     for( i = mi - 10; i <= mi + 10; ++i ){
+        if( i < 0 || i >= 40 ) continue;
+        Serial.write( ' ' );  Serial.print( vals[i] );
+        if( i == mi ) Serial.write('*');
+     }
+     Serial.println();
+
+}
+#endif
