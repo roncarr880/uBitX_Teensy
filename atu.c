@@ -6,7 +6,8 @@
   O  -  On, apply relays
   S  -  Set relay data Cval Lval ( apply or wait for O command? )
   R  -  Report relay values  Cval Lval
-  P  -  Report Fwd and Rev Power. Fwd, Rev, high and low bytes. 
+  P  -  Report Fwd and Rev Power. Fwd, Rev, high and low bytes.
+  W  -  Report sWr
   T  -  Tune ( return a done value ? )
   C D   Inc or Dec Cval
   L M   Inc or Dec Lval
@@ -29,6 +30,9 @@
 #define B6  0x40
 #define B7  0x80
 
+#define ADRIGHT 0x80           /* use as 8 bit result */
+#define ADLEFT  0x00           /* use as 10 bit result */
+
 /*   #pragma pic 504
      char stack[8];   not using this */
 #pragma pic 0
@@ -42,6 +46,8 @@ char _eedata;
                     /* there doesn't seem to be any method to the madness of the I/O port assignments */
 char Cvals;         /* straight data 7 bits, will need to be dispersed to the correct port,bit */
 char Lvals;
+char Hval;
+
 /*********
 char Pa;            /*  Ports for relay bits 
 char Pb;                changed function to inline asm
@@ -58,6 +64,22 @@ char tx_out;
 char rstate;        /* uart vars that need to be initialized */
 char tstate;
 char rtimer;        /* relay time */
+char fwdh, fwdl;
+char revh, revl;
+char swr;
+char tlow, thigh;   /* tune timeout trys counter */
+
+/* integer math vars */
+char accl;
+char acch;
+char argl;
+char argh;
+char overflow;
+char carry;
+char divi;
+char divql;
+char divqh;
+
 
 
 
@@ -87,6 +109,7 @@ static char temp;
   S  -  Set relay data Cval Lval ( apply or wait for O command? )
   R  -  Report relay values  Cval Lval
   P  -  Report Fwd and Rev Power. Fwd, Rev, upper or lower bits in 3rd value returned.
+  W  -  Report sWr
   T  -  Tune ( return a done value ? )
   C D   Inc or Dec Cval
   L M   Inc or Dec Lval
@@ -101,13 +124,17 @@ static char temp;
          case 'O':  write_vals(); break;    /* relays on */
          case 'S':  set_vals(); /*write_vals();*/  break;    /* new relay data from host */
          case 'R':  report_vals(); break;   /* send relay settings to host */
-         case 'P':  report_power(); break;  /* report FWD, REV readings */
+         case 'P':  report_power(); break;  /* report new FWD, REV readings */
          case 'T':  tune();     break;
          case 'C':  ++Cvals;  /*write_vals();*/  break;
          case 'D':  --Cvals;  /*write_vals();*/  break;
          case 'L':  ++Lvals;  /*write_vals();*/  break;
          case 'M':  --Lvals;  /*write_vals();*/  break;
-         case 'H':  Cvals ^= B7; /*write_vals();*/  break;   /* toggle cap input or output side of L's */
+         case 'H':  Hval ^= B7; /*write_vals();*/  break;   /* toggle cap input or output side of L's */
+         case 'W':
+            put_tx('W');
+            put_tx(swr);     /* last value from tune, for dynamic values use P - current fwd and rev power */
+         break;
       }
    }
 
@@ -116,13 +143,16 @@ static char temp;
 bypass(){               /* clear relays */
 static char tc;
 static char tl;
+static char h;
 
     tc = Cvals;         /* but save current settings */
     tl = Lvals;
-    Cvals = Lvals = 0;
+    h = Hval;
+    Hval = Cvals = Lvals = 0;
     write_vals();
     Cvals = tc;
     Lvals = tl;
+    Hval = h;
 }
 
 set_vals(){            /* get new settings from host, wait to implement */
@@ -131,20 +161,128 @@ set_vals(){            /* get new settings from host, wait to implement */
    Cvals = get_rx();
    while( rx_in == rx_out );
    Lvals = get_rx();
+   Hval = Cvals & B7;
+   Cvals &= 0x7F;
 }
 
 report_vals(){
 
    put_tx('R');
-   put_tx( Cvals );
+   put_tx( Cvals+Hval );
    put_tx( Lvals );
 }
 
 report_power(){
+   
+   ad_sample( ADRIGHT );
    put_tx('P');
+   put_tx( fwdh );
+   put_tx( fwdl );
+   put_tx( revh );
+   put_tx( revl );
 }
 
 tune(){
+
+   tlow = thigh = 0;         /* timeout try counter */
+   Qtune();
+   if( thigh >= 4 ){
+      put_tx('T');
+      put_tx( swr );
+      return;
+   }
+   if( swr > 13 ) Ftune();     /* swr scaled by 10 */
+   put_tx('T');
+   put_tx(swr);
+
+}
+
+Qtune(){                 /* shift a bit across L and C, should take 1 second */
+static char swrq;
+static char L,C,H;
+
+   swrq = 99;
+   L = C = H = 0;
+   Cvals = C;
+   Lvals = L;
+   Hval = H;
+   write_vals();      /* get a base reading of passthrough */
+   get_swr();
+   swrq = swr;
+   if( thigh >= 4 || swr <= 13 ) return;
+
+   for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
+      for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
+         Hval = 0;
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            L = Lvals;
+            C = Cvals;
+            H = 0;
+            swrq = swr;
+         }
+         Hval = 128;            /* caps other side of L */
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            L = Lvals;
+            C = Cvals;
+            H = 128;
+            swrq = swr;
+         }
+      }
+      if( thigh >= 4 || swrq <= 15 ) break;      /* how low a swr expected from quick algorithm? */
+   }
+   /* apply best so far */
+   Cvals = C;
+   Lvals = L;
+   Hval = H;
+   write_vals();
+   swr = swrq;  
+}
+
+Ftune(){                   /* fine tune near the quick tune result, power 2 below to power 2 above */
+static char swrq;
+static char L,C,H;
+static char EL, EC;
+static char BC;
+
+   L = Lvals;  C = Cvals;  H = Hval;
+   Lvals >>= 1;
+   Cvals >>= 1;
+   BC = Cvals;
+   EL = L << 1;
+   EC = C << 1;
+   write_vals();                /* starting swr */
+   get_swr();
+   swrq = swr;  
+   if( thigh >= 4 ){            /* timeout, use best known so far */
+     Cvals = C;
+     Lvals = L;
+    /* Hval = H;                   redundant as not changing H here */
+     write_vals();     
+     return;
+   }
+
+   for( ; Lvals < EL;  ++Lvals ){
+      for( Cvals = BC; Cvals < EC; ++Cvals ){
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            C = Cvals;
+            L = Lvals;
+            swrq = swr;
+         }
+         if( thigh >= 4 || swrq <= 12 ) break;
+      }
+      if( thigh >= 4 || swrq <= 12 ) break;
+   }
+   swr = swrq;                /* write best */
+   Cvals = C;
+   Lvals = L;
+   /* Hval = H;    */
+   write_vals(); 
 }
 
 
@@ -328,10 +466,10 @@ write_vals( ){     /* apply the relay settings */
       bsf   LATC,4
       btfss Cvals,6
       bcf   LATC,4
-   ;if( Cvals & 0x80 ) Pc |= B0;    /* caps on input side or output side */
-      btfsc Cvals,7
+   ;if( Hvals & 0x80 ) Pc |= B0;    /* caps on input side or output side */
+      btfsc Hval,7
       bsf   LATC,0
-      btfss Cvals,7
+      btfss Hval,7
       bcf   LATC,0
 
    ;if( Lvals & 0x01 ) Pb |= B3;
@@ -371,17 +509,16 @@ write_vals( ){     /* apply the relay settings */
       bcf   LATA,4
    #endasm
 
-   /* !!! should we wait here for relay settling time before processing any more commands? */
+   /* wait here for relay settling time before processing any more commands */
    delay(10);
-   /*  should we kick off a FWD REV measurement after waiting */
-   /* I think report power should do the measurement and report the fresh value */
+
 }
 
 delay( char tm ){      /* approx delay using .278 ms steps, use .25 in calculation */
                        /* max delay for call about 63 ms, or shift overflows */
    tm <<= 2;           /* mult by 4 for ms */
    rtimer = tm;
-   while( rtimer );
+   while( rtimer );    /* interrupt service decrements the timer */
 }
 
 interrupts(){
@@ -401,6 +538,215 @@ no_interrupts(){
    #endasm
 
 }
+
+ad_sample( char just ){
+
+  ADCON2 = just + 0x25;    /* 8 tad sample, tad is 16 divider of 8 meg clock, 2us */
+  ADCON0 = 1;              /* on sample chan 0 */
+  #asm
+    bsf ADCON0,1
+  #endasm
+  while( ADCON0 & B1 );    /* wait done */
+  fwdh = ADRESH;
+  fwdl = ADRESL;
+
+  ADCON0 = 5;
+  #asm
+    bsf ADCON0,1
+  #endasm
+  while( ADCON0 & B1 );    /* wait done */
+  revh = ADRESH;
+  revl = ADRESL;
+  
+}
+
+get_swr(){
+static char fwd;
+
+   fwd = 0;
+   while( fwd < 4 ){                 /* noise always less than 4 ? */
+     if( ++tlow == 0 ) ++thigh;
+     ad_sample( ADRIGHT );
+     if( fwdh == 0 ) fwd = fwdl;     /* see if have a reading */
+     else fwd = 99;
+     if( fwd < 4 ) delay( 10 );
+     if( thigh >= 4 ){
+        swr = 253;
+        return;
+     }
+   }
+
+   /* calc swr in 16 bit */
+
+   acch = fwdh;   accl = fwdl;
+   argh = revh;   argl = revl;
+   dadd();
+   multiply( 10 );                     /* scale up for factional part */
+   divqh = acch;  divql = accl;
+
+   acch = fwdh;   accl = fwdl;
+   argh = revh;   argl = revl;
+   if( dsub() ){                       /* borrow, rev is higher than fwd */
+      swr = 250;
+      return;
+   }
+   argh = acch;   argl = accl;
+   if( argh == 0 && argl == 0 ){       /* test divide by zero */
+      swr = 251;
+      return;
+   }
+   divide();
+   if( divqh ){                        /* result more than 8 bits */
+      swr = 252;
+      return;
+   }
+   swr = divql;
+
+}
+
+
+/****************   16bit  math ********************/
+
+zacc(){          /* zero accumulator */
+
+   accl = acch = 0;
+}
+
+char dadd(){     /* double add, return carry */
+
+   #asm
+      BANKSEL overflow
+      clrf    overflow
+      clrf    carry
+
+      movf	argl,W
+      addwf	accl,F          ; add low bytes
+      btfsc   STATUS,C
+      incf    carry,F          ; save carry
+
+      movf	carry,W        ; add the carry if any to high byte
+      addwf	acch,F
+
+      btfsc   STATUS,C
+      incf    overflow,F        ; capture and save if adding one caused overflow 
+
+      movf	argh,W          ; add the high bytes
+      addwf	acch,F
+
+      btfsc   STATUS,C
+      incf    overflow,F        ; merge in if had an overflow here
+
+   #endasm
+
+   return overflow;     /* return 0, 1, or 2 */
+   
+}
+
+right_shift( char count ){   /* unsigned shift double (or divide by 2) the accumulator */
+
+   while( count-- ){
+     #asm
+        banksel  acch
+        bcf   STATUS,C      ; logical shift right double
+        rrf   acch,F
+        rrf   accl,F
+     #endasm
+   }
+}
+
+char dsub(){    /* double subb, return borrow as a true value */
+
+
+   #asm
+
+      BANKSEL overflow
+      clrf    overflow
+      clrf    carry
+
+      movf	argl,W
+      subwf	accl,F          ; sub low bytes
+      btfss   STATUS,C         ; carry set means no borrow, skip next
+      incf    carry,F          ; save borrow
+
+      movf	carry,W        ; sub the borrow if any from high byte
+      subwf	acch,F
+
+      btfss   STATUS,C
+      incf    overflow,F        ; capture and save if subbing one caused a borrow 
+
+      movf	argh,W          ; sub the high bytes
+      subwf	acch,F
+
+      btfss   STATUS,C
+      incf    overflow,F        ; merge in if had a borrow here
+
+   #endasm
+   return overflow;     /* return borrow as true */
+
+}
+
+/* a divide algorithm */
+/* dividend quotient has the dividend, argh,argl has the divisor, remainder in acch,accl */
+/* shift upper bits of the dividend into the remainder, test a subtraction of the divisor */
+/* restore the remainder on borrow, or set a bit in quotient if no borrow */
+/* divisor remains unchanged */
+
+divide(){
+ 
+   zacc();
+   for( divi = 0; divi < 16; ++divi ){
+      #asm
+        bcf   STATUS,C
+        rlf   divql,F        ; banksel ok here, same as divi
+        rlf   divqh,F
+        rlf   accl,F
+        rlf   acch,F
+      #endasm
+      if( dsub() ) dadd();     /* borrow, add back */
+      else divql |= 1;         /* no borrow, so set a 1 in quotient */
+   }
+}
+
+divide_k( char constant ){      /* divide accumulator by a constant or char */
+                                /* put result in the accum overwriting remainder */
+   
+   divql = accl;   divqh = acch;
+   argh  = 0;      argl = constant;
+   divide();
+   accl = divql;   acch = divqh;
+}
+
+
+/* untested multiply routine */
+/* 8 by 16 bit multiply, unsigned, assume result fits in 16 bits, return overflow if not */
+/* 
+   acch,accl has multiplicand, moved to argh,argl.
+   8 bit multiplier as function argument,   product in acch,accl
+   add increasing powers of 2 of the multiplicand to the product depending upon bits set in the multiplier
+*/
+char multiply( char multi ){
+static char over;
+
+    over = 0;
+    divi = multi;  /* use a same bank variable as the multiplier variable */
+    argh = acch;   /* get the multiplicand out of the accumulator */
+    argl = accl;
+    zacc();
+
+    while( divi ){
+       if( divi & 1 ) over |= dadd();
+       divi >>= 1;
+       #asm
+          ; banksel argl     ; multi and argl in different banks, fixed by using divi
+          bcf  STATUS,C
+          rlf  argl,F
+          rlf  argh,F
+       #endasm
+    }
+
+    return over;
+}
+
 
 
 /*****************************************  save older code

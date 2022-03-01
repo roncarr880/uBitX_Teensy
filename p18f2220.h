@@ -1333,7 +1333,7 @@ char ADCON2;
 char ADCON1;
 char ADCON0;
 char ADRESL;
-char ADRRSH;
+char ADRESH;
 char SSPCON2;
 char SSPCON1;
 char SSPSTAT;
