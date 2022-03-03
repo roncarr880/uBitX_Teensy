@@ -180,6 +180,7 @@
 //  Or maybe Wire.h will work ok with this program instead of i2c_t3 if desired. 
 #include <SPI.h>
 #include "led_fonts.h"
+#include "smeter5.h"
 
 #define BFO 11059590L          // this puts the bfo on the high side of the filter, sharper cutoff?
 #define IF  45000000L          // what is the actual center of the IF.  Testing says 45k even is about right.
@@ -626,7 +627,7 @@ int t2;
 
    radio_control();                         // CAT
    check_ptt();
-   if( screen_owner == DECODE ) signal_peak();
+   if( screen_owner == DECODE ) info_corner();
    
 }
 
@@ -656,24 +657,42 @@ void tune(){          // enable a low power tune signal via DAC and SideTone obj
   
 }
 
-void signal_peak(){
+void info_corner(){
 static uint32_t tm;                                // slow down the display
 float val;
+float val2;
+static float val3;                                 // save peak for info as now calling the smeter more frequently
+const int ls = 11;                                 // vertical spacing of lines from line 80
+static int mod;
 
-    if( millis() - tm < 500 ) return;
+    if( millis() - tm < 25 ) return;
     if( peak1.available() == 0 ) return;
     tm = millis();
+    val2 = peak1.read();
+    if( val2 > val3 ) val3 = val2;
 
-    tft.setTextSize( 2 );
-    tft.setTextColor(EGA[15], EGA[1] );
-    tft.setCursor( 120, 180 );
-    val = (float)AudioProcessorUsage() / 100.0 ;
-    tft.print( val );
-    tft.setCursor( 50, 180 );
-    val = peak1.read();
-    if( val > 0.98 ) tft.setTextColor( EGA[12], EGA[1] );
-    else if( val > 0.90 ) tft.setTextColor( EGA[14], EGA[1] );
-    tft.print( val );
+    if( ++mod == 40 ){
+       mod = 0;
+       tft.setTextSize( 1 );
+       tft.setTextColor(EGA[10], EGA[0] );
+       tft.setCursor( 254, 80+ 1*ls );
+       tft.print("cpu ");
+       tft.setCursor( 280, 80+ 1*ls );
+       val = (float)AudioProcessorUsage() / 100.0 ;
+       tft.print( val );
+
+       tft.setCursor( 254, 80 );                       // displaying top line last for color changes
+       tft.print("Sig ");
+       tft.setCursor( 280, 80 );
+       if( val3 > 0.98 ) tft.setTextColor( EGA[12], EGA[0] );
+       else if( val3 > 0.90 ) tft.setTextColor( EGA[14], EGA[0] );
+       tft.print( val3 );
+       val3 = 0.0;
+    }
+
+    val2 = map( val2,0.0,1.0,1.0,10.0 );
+    val2 = log10(val2);
+    sig_pwr_meter( val2 );
 }
 
 
@@ -950,6 +969,7 @@ void menu_cleanup(){
    vfo_freq_disp();
    mf_bar_disp();
    set_volume( volume_ );
+   sig_pwr_meter( -1.0 );           // reset meter to zero
 }
 
 void mf_bar_disp(){                 // display a bar on left side to show a menu exists there
@@ -970,16 +990,66 @@ int i;
       tft.setCursor( 319-7, 77+10*i );
       tft.write( msg3[i] );
    }   
+   //   tft.writeRect(9, 70, 209, 100, (uint16_t*)smeter);
+   // tft.writeRect(9, 72, 209, 98, (uint16_t*)smeter);    // try down two pixel and not write bottom 2 lines
+   //tft.writeRect(9, 72, 182, 98, (uint16_t*)smeter2);
+   //tft.writeRect(9, 72, 208, 98, (uint16_t*)smeter3);
+   //tft.writeRect(9, 72, 208, 98, (uint16_t*)smeter4);
+   tft.writeRect(9, 72, 234, 96, (uint16_t*)smeter5);      // bottom two lines left off for divider box lines
    tft.fillRect( 148,65,32,8,EGA[4] );           // band select
    tft.setCursor( 153,65 );
-   tft.print( msg2 );
+   tft.print( msg2 );                            // overwrites part of the smeter
+   /**********
    tft.fillRect( 319-8,0,8,20,EGA[4] );          // mode select, not much room here for text
    tft.setCursor( 319-7,1 );
    tft.write( 'M' );
    tft.setCursor( 319-7,11);
    tft.write( 'd' );
+   ***********/
+}
 
-   
+// non-log meter unless convert the value before calling,  value is 0 to 1.0 for zero to full scale. 
+// on rx, more of an indication of the input to the A/D converter than S signal value
+void sig_pwr_meter( float val ){                // move the indicator bar around with a sprite
+const int sx = 40;
+const int sy = 131;                                    // zero position
+static int pos;                                        // current x position
+static int mod;                                        // slow down the fall of the meter
+//uint8_t sprite[] = { 0,0,0xaa,0xa0,0xaa,0xa0,0,0 };
+//uint8_t sprite[] = { 0,0,0,0x0a,0xaa,0xa0,0x0a,0xaa,0xa0,0x0a,0xaa,0xa0,0,0,0 };
+//uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0 };        // 2x6 
+//uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0 };          // 2x6  erase only on falling
+uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0xa0,0 };          // 2x7  erase only on falling
+int x,y;
+const int xm = 170;
+int r;                                   // flag if nothing to do
+
+    if( val < 0.0 ){                     // reset on menu exit
+        pos = 0;
+        return;
+    }
+    // where should the indicator be.  Move one pixel at a time.
+    r = 1;
+    x = xm * val;
+    if( x > pos+2 ) ++pos, r = 0;
+    else if( x < pos-1 ){
+       if( ++mod == 3 ) mod = 0, --pos, r = 0;
+    }
+    if( r ) return;                      // no change in indicator position
+    
+    x = pos;
+    
+   // y = (pos > xm/2) ? xm-pos : pos;
+   // y = -y/8;                              // should be sine or cosine involved, this is linear 
+
+    float th = -0.785 + 0.785 * (float(x)/(float)(xm/2));    // -45 to +45 degrees
+    th = cos(th) - cos( 0.785 );                             // amount to raise the curve
+    y = -48.0 * th;                                          // pixel fudge factor
+
+       //writeRect4BPP(int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *pixels, const uint16_t * palette );
+    tft.writeRect4BPP( sx+x, sy+y, 2, 7, sprite, EGA );
+   // tft.writeRect4BPP( 0, 0, 4, 4, sprite, EGA );
+
 }
 
 uint32_t touch(){
@@ -1487,6 +1557,9 @@ int32_t as;
     
    tft.drawLine(0,69,319,69,EGA[4]);                 // 64
    tft.drawLine(0,70,319,70,EGA[4]);
+   tft.drawLine(0,169,319,169,EGA[4]);
+   tft.drawLine(0,170,319,170,EGA[4]);
+   
 //   if( decode_menu_data.current != DHELL ){
 //      tft.drawLine(0,128,319,128,EGA[4]);
 //      tft.drawLine(0,129,319,129,EGA[4]);
