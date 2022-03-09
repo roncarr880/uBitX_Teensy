@@ -89,7 +89,8 @@
  *      Added audio library elements.  Compile for USB type Serial,Midi,Audio.   
  *      Removed the LM386 and converted to Digital audio.  USB receive audio works.
  *      Enabled TX USB audio for DIGI mode in tx() function.  It seems I wired the tx level pot backwards, CCW increases the tx drive.
- *      Added a fine tune clarify to help with frequency drift due to temperature changes. 
+ *      Added a fine tune clarify to help with frequency drift due to temperature changes. Changes both transmit and receive frequency.
+ *        This is not a RIT control.
  *      Added PWM filter for headphone audio, 10n and 4.7mh.
  *      A/D may be quieter without connecting Analog ground to Digital ground.
  *      Added some TX/RX sequencing to the PTT function.  Relays and bi-directional amps take somewhere between 32 and 42 ms to switch.
@@ -106,10 +107,17 @@
  *      Added DIGI drive level per band.  Set for output of 5 watts at 12.5 volts.  Set tune power to 25% approximately 1 watt.
  *        Power out is lower on 15, 12 and 10 meters. 
  *      Wired up the ATU.  PIC16F1938 out of stock for 1 year.  PIC18F2220 has I2C on different pins, other pins look ok.  
- *        May try I2C bitbang at reduced speed of 50k.  PIC at 8 meg clock has 2 instuctions per us, 20 per clock change at 50k. 
+ *        Wired a Pickit 2 header to the I/O interface provided, Power, Ground, Data, Clock did not line up in any useful way. 
+ *           Wired the Pickit interface such that Data and Clock line up which put Vpp, Vcc and Ground on the I/O lines of 
+ *           RB0-RB2.  So this method lost the 3 I/O lines and required leaving the one pin where Vpp connected out of the socket.
+ *      Added an S meter using an image converted with 565 online image converter by Rinky Dink Electronics.
+ *      Added a way to override 5 watt DIGI power and allow full power if desired, so non-qrp DIGI mode.  15 12 and 10 will still be < 5 watts.
  *      
- *      
- *  To do. 
+ *  To do.
+ *      Review power levels again.  I twiddled the MIC gain pot a bit to make sure it was in a linear range.
+ *        Think I should set this for 5 watts on 17 meters instead of 15 meters as I did before.
+ *      Review PWM audio.  Is the 88k suppressed enough.  Would it sound better using the DAC and an analog mux to allow dual use
+ *        for both transmit and receive?  A Teensy 3.5 would allow easier wiring with 2 DAC's. 
  *      Noticed some spurs on SSB transmit, think a 11 meg IF suckout trap on TP13 or TP14 may be useful.  Not much room there. 
  *        Farhan says move L5 and L7 to side two - signal feedback to the 45 meg filter. This would be a simple fix. 
  *        Scope FFT on TP13 and TP14 to see if have any 11 meg signal there.  Could use Scope FFT to see what stage the spurs appear. 
@@ -126,7 +134,7 @@
  *      CW decoder.   Hell decoder.
  *      Audio scope, audio FFT displays.  Band scope by scanning? ( mute, scan one freq, return vfo, unmute )
  *      Noise reduction, auto notch.
- *      CW filters.
+ *      CW filters.   SSB high cut filter for QRM reduction. 
  *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time.  
  *      ATU firmware. 
  *      Some pictures for documentation.
@@ -339,14 +347,15 @@ uint8_t  cat_tx;                       // a flag that CAT is in control of the t
 #define PRACTICE_T  4          // last options toggle practice, and swap
 #define KEY_SWAP    5
 uint8_t key_mode = ULTIMATIC;
-int     cw_practice = 1;               // toggle and multi fun variables must be int, have value 0 to 99.
-int     key_swap = 0;
-int     wpm = 14;
-int     volume_ = 10;                  // actual * 0.1   Digital gain range 0 to 10
-int     clari  = 50;                   // adjustment for temperature changes, maps to +-50 hz
-int     tuning;                        // low power tune via sidetone object
-int side_vol = 10;                     // sidetone volume
-uint8_t oob;                           // out of band flag, don't save vfo's to the bandstack.  Don't transmit.
+int  cw_practice = 1;               // toggle and multi fun variables must be int, have value 0 to 99.
+int  key_swap = 0;
+int  wpm = 14;
+int  volume_ = 10;                  // actual * 0.1   Digital gain range 0 to 10
+int  clari  = 50;                   // adjustment for temperature changes, maps to +-50 hz
+int  tuning;                        // low power tune via sidetone object
+int side_vol = 10;                  // sidetone volume
+uint8_t oob;                        // out of band flag, don't save vfo's to the bandstack.  Don't transmit.
+int  digi5w = 1;                    // use the digi power levels in the bandstack for digi power
 
 
 //   Touch menu's
@@ -486,12 +495,13 @@ const char tt_ks[] = "Key Swap";
 const char tt_kp[] = "Practice";
 const char tt_ft[] = "Fast Vfo";
 const char tt_tt[] = "ATU TUNE";
+const char tt_d5[] = "Digi  5W";
 
 struct multi toggles_data = {
    " Toggle Values",
-   4,
-   { tt_ks, tt_kp, tt_ft, tt_tt },
-   { &key_swap, &cw_practice, &fast_tune, &tuning },
+   5,
+   { tt_ks, tt_kp, tt_ft, tt_tt, tt_d5 },
+   { &key_swap, &cw_practice, &fast_tune, &tuning, &digi5w },
    2
 };
 
@@ -546,7 +556,7 @@ void setup() {
   tft.setTextSize(1);
   tft.setCursor(14,230);     tft.print("Mic");
   tft.setCursor(150,230);     tft.print("Spkr");
-  tft.setCursor(319-24,230);     tft.print("Key");
+  tft.setCursor(319-24,230);    tft.print("Key");
 
   Wire.begin();                             // I2C_OP_MODE_DMA, I2C_OP_MODE_ISR possible options.
   Wire.setClock(400000);
@@ -619,9 +629,8 @@ int t2;
       t2 = button_state(0);
       if( t2 > DONE ) button_process(t2);
       if( vfo_mode & VFO_CW ) keyer();
-      if( tuning ) tune();
+      if( tuning ) tune();                  // Antenna tuning
       if( transmitting ) tx_rx_seq();       // 48 ms delays for TX RX switching
-
      // test_1st_IF();                        // find the center of the 45mhz filter. Seems 45k about right.
    }
 
@@ -630,6 +639,7 @@ int t2;
    if( screen_owner == DECODE ) info_corner();
    
 }
+
 
 #define TUNE_OFF 10000       // 10000 is 10 seconds
 void tune(){          // enable a low power tune signal via DAC and SideTone object.  Sequence and timeout.
@@ -644,7 +654,7 @@ void tune(){          // enable a low power tune signal via DAC and SideTone obj
           // si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 )); handled in tx sequencer
            SideTone.frequency(1500);
            SideTone.amplitude(0.99);
-           TX_SEL.gain(0,0.25);                // set mic level for 15 meters, not sure it is in a linear range
+           TX_SEL.gain(0,0.25);                // set mic level pot on 17 meters, 15m - 10m will be lower than other bands
            //TX_SEL.gain(0,(float)side_vol/100.0);    // !!! testing only, side_vol is the audio sidetone during CW tx
         break;
         case TUNE_OFF:                        // timeout at nn seconds
@@ -684,14 +694,14 @@ static int mod;
        tft.setCursor( 254, 80 );                       // displaying top line last for color changes
        tft.print("Sig ");
        tft.setCursor( 280, 80 );
-       if( val3 > 0.98 ) tft.setTextColor( EGA[12], EGA[0] );
-       else if( val3 > 0.90 ) tft.setTextColor( EGA[14], EGA[0] );
+       if( val3 > 0.95 ) tft.setTextColor( EGA[12], EGA[0] );
+       else if( val3 > 0.85 ) tft.setTextColor( EGA[14], EGA[0] );
        tft.print( val3 );
        val3 = 0.0;
     }
 
-    val2 = map( val2,0.0,1.0,1.0,10.0 );
-    val2 = log10(val2);
+    val2 = map( val2,0.0,1.0,1.0,10.0 );               // log scale on meter, convert 0.0 - 1.0 to a value where the log
+    val2 = log10(val2);                                //  has a range of 0.0 - 1.0  ( log of 1 is zero, log of 10 is 1.0 )
     sig_pwr_meter( val2 );
 }
 
@@ -804,7 +814,7 @@ void multi_fun_touch( int32_t t ){
 int selection;
 
      selection = touch_decode( t, 40 );
-     if( selection == -1 || selection >= multi_fun_data.num ){       // stay in menu, only exit when touch exit
+     if( selection == -1 || selection >= multi_fun_data.num ){       // exit when touch exit, else this menu stays on the screen
         // check limits on some variables
         wpm = constrain( wpm, 10, 50 );                              // avoid divide by zero
         cw_tr_delay = constrain( cw_tr_delay, 10, 99 );              // min tr delay of 100ms max 990
@@ -861,7 +871,7 @@ int selection;
           key_mode = keyer_menu_data.param[selection];
           keyer_menu_data.current = selection;
       }
-      else if( selection == 4 ) cw_practice ^= 1;            // a toggle not in the toggles menu
+      else if( selection == 4 ) cw_practice ^= 1;            // these toggles are also in the toggles menu
       else if( selection == 5 ) key_swap ^= 1;
    }
    
@@ -972,6 +982,7 @@ void menu_cleanup(){
    sig_pwr_meter( -1.0 );           // reset meter to zero
 }
 
+// !!! this function name should be different as function does more now than just the mf bar on the left side of the screen
 void mf_bar_disp(){                 // display a bar on left side to show a menu exists there
 const char msg[]  = "Multi Fun";    // also add some other boxes for menu hotspots, the hidden menu is no longer hidden
 const char msg2[] = "Band";
@@ -989,7 +1000,8 @@ int i;
    for( i = 0; i < 9; ++i ){
       tft.setCursor( 319-7, 77+10*i );
       tft.write( msg3[i] );
-   }   
+   }
+   // display the S meter image   
    //   tft.writeRect(9, 70, 209, 100, (uint16_t*)smeter);
    // tft.writeRect(9, 72, 209, 98, (uint16_t*)smeter);    // try down two pixel and not write bottom 2 lines
    //tft.writeRect(9, 72, 182, 98, (uint16_t*)smeter2);
@@ -1017,38 +1029,45 @@ static int pos;                                        // current x position
 static int mod;                                        // slow down the fall of the meter
 //uint8_t sprite[] = { 0,0,0xaa,0xa0,0xaa,0xa0,0,0 };
 //uint8_t sprite[] = { 0,0,0,0x0a,0xaa,0xa0,0x0a,0xaa,0xa0,0x0a,0xaa,0xa0,0,0,0 };
-//uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0 };        // 2x6 
-//uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0 };          // 2x6  erase only on falling
-uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0xa0,0 };          // 2x7  erase only on falling
+//uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0 };                       // 2x6  erase only on falling
+//uint8_t sprite[] = { 0,0xa0,0xa0,0xa0,0xa0,0xa0,0 };                  // 2x7  erase only on falling
+const uint8_t spriteg[]  = { 0x00,0xa0,0xa0,0xa0,0xa0,0xa0,0xa0,0xa0,0x00 };     // there is room to go wider, 2x9
+const uint8_t spritey[] = { 0x00,0xe0,0xe0,0xe0,0xe0,0xe0,0xe0,0xe0,0x00 };
+const uint8_t spriter[] = { 0x00,0xc0,0xc0,0xc0,0xc0,0xc0,0xc0,0xc0,0x00 };
 int x,y;
-const int xm = 170;
+const int xm = 170;                      // x value scaling factor
 int r;                                   // flag if nothing to do
+int i;                                   // loop 3 times for faster response on signal increases
 
     if( val < 0.0 ){                     // reset on menu exit
         pos = 0;
         return;
     }
-    // where should the indicator be.  Move one pixel at a time.
-    r = 1;
-    x = xm * val;
-    if( x > pos+2 ) ++pos, r = 0;
-    else if( x < pos-1 ){
-       if( ++mod == 3 ) mod = 0, --pos, r = 0;
-    }
-    if( r ) return;                      // no change in indicator position
-    
-    x = pos;
-    
-   // y = (pos > xm/2) ? xm-pos : pos;
-   // y = -y/8;                              // should be sine or cosine involved, this is linear 
 
-    float th = -0.785 + 0.785 * (float(x)/(float)(xm/2));    // -45 to +45 degrees
-    th = cos(th) - cos( 0.785 );                             // amount to raise the curve
-    y = -48.0 * th;                                          // pixel fudge factor
+    for( i = 0; i < 3; ++i ){
+       // where should the indicator be.  Move one pixel at a time.
+       r = 1;
+       x = xm * val;
+       if( x > pos+2 ) ++pos, r = 0;
+       else if( x < pos ){
+          if( ++mod == 3 ) mod = 0, --pos, r = 0;
+       }
+       if( r ) return;                      // no change in indicator position
+    
+       x = pos;
+    
+      // y = (pos > xm/2) ? xm-pos : pos;
+      // y = -y/8;                              // should be sine or cosine involved, this is linear 
+
+       float th = -0.785 + 0.785 * (float(x)/(float)(xm/2));    // -45 to +45 degrees
+       th = cos(th) - cos( 0.785 );                             // amount to raise the curve
+       y = -48.0 * th;                                          // pixel fudge factor
 
        //writeRect4BPP(int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *pixels, const uint16_t * palette );
-    tft.writeRect4BPP( sx+x, sy+y, 2, 7, sprite, EGA );
-   // tft.writeRect4BPP( 0, 0, 4, 4, sprite, EGA );
+       if( pos > 0.85*xm ) tft.writeRect4BPP( sx+x, sy+y, 2, 9, spriter, EGA );          // red
+       else if( pos > 0.75*xm ) tft.writeRect4BPP( sx+x, sy+y, 2, 9, spritey, EGA );     // yellow
+       else tft.writeRect4BPP( sx+x, sy+y, 2, 9, spriteg, EGA );      // 4BPP, 2 pixels per byte.  0xa0 has one green pixel, one black pixel
+    }                                                                 // with colors from the EGA pallett.
 
 }
 
@@ -1101,6 +1120,7 @@ char buf[20];
       if( m->menu_item[i][0] == 0 ) break;       // null option
       if( y + 30  > 239 ) break;                 // screen is full
       if( i >= m->num ) break;                   // redundant to null string test above just in case
+      tft.setTextSize(2);
       tft.fillRect(x+5,y+5,160-10,30,EGA[2]);
       tft.setCursor( x+10,y+10 );
       if( i == m->current ) tft.setTextColor( ILI9341_YELLOW, EGA[2] );
@@ -1108,6 +1128,7 @@ char buf[20];
       strncpy(buf,m->menu_item[i],12);    buf[12] = 0;
       tft.print(buf);
       tft.setCursor( x+120, y+10 );
+      if( *(m->val[i]) >= 100 ) tft.setTextSize(1);   // for Tune counter value, exceeds 100 while tune in progress
       if( *(m->val[i]) < 10 ) tft.write(' ');
       tft.print( *(m->val[i]) );
       x += 160;
@@ -1392,7 +1413,7 @@ char bp;
    tft.setTextSize(1);
    if( bp == 'X' ) { tft.setTextColor( EGA[12],0); tft.print("  OOB"); }
    //if( bp == 'E' || bp == 'e' ) tft.print("Extra"); 
-   if( bp == 'E' || bp == 'e' ) { tft.setTextColor( EGA[12],0);  tft.print("Extra"); } // my class is Advanced, so display Extra Red
+   if( bp == 'E' || bp == 'e' ) { tft.setTextColor( EGA[12],0);  tft.print("Extra"); } // my class is Advanced, so display Extra in Red
    if( bp == 'A' || bp == 'a' ) tft.print("  Adv");
    if( bp == 'G' || bp == 'g' ) tft.print("  Gen");
    if( bp == 'e' || bp == 'g' || bp == 'a' ) tft.write('-');     // cw digi band
@@ -1437,7 +1458,7 @@ void disp_vfo( int32_t vfo, int column, int color ){          // row is hardcode
        else column += disp_segments(column,c,color,MediumNumbers);
        vfo -= digit*mult;
        mult /= 10;
-       column += 3;                // wider spacing was 2
+       column += 3;                // wider spacing, was 2
    }  
   
 }
@@ -1446,7 +1467,6 @@ void disp_vfo( int32_t vfo, int column, int color ){          // row is hardcode
 // change a mono font to 4BPP for display.  bits need to change from a vertical 0-7 to horizontal format.
 // only using two colors so each 4 bits will be 0 or the forground color
 // displaying at a fixed row for now, but should probably pass that as an argument also
-// pass color also would be good
 int disp_segments( int pos, uint8_t digit, int color, const uint8_t font[] ){
 int i,j,k,w,h,base,sz,adr;
 uint8_t chr[1350];
@@ -2054,6 +2074,7 @@ void rx(){
 
 // what needs to happen to enter tx mode
 void tx(){
+float pwr;
 
   if( oob ){                                // disable tx out of band.   WSJT freq changes can leave vfo_b out of band.
      rx();
@@ -2070,7 +2091,8 @@ void tx(){
      si5351bx_setfreq( 1, 0 );
   }
   else if( vfo_mode & VFO_DIGI ){
-     TX_SEL.gain(1,band_stack[band].digi_pwr);   // turn on the USB audio for DIGI TX
+     pwr = (digi5w) ? band_stack[band].digi_pwr : 0.99;     // limit digi to 5w or full power ?
+     TX_SEL.gain(1,pwr);                                    // turn on the USB audio for DIGI TX
   }
  
   digitalWriteFast( TR, HIGH );
@@ -2224,4 +2246,31 @@ static float vals[40];
      Serial.println();
 
 }
+
+void band_scan(){
+static int t;
+
+   return;    // this seems to need more delay than expected to avoid mixing the two frequencies, or avoid mixing the audio to the speaker
+              // the time that the audio needs to be muted is too long 
+   
+   if( ++t < 173 ) return;
+   t = 0;
+   // fake it 
+   set_volume( 0.0 );
+   delay(3);
+   si5351bx_setfreq(2,7076000+IF);
+   delay(3);
+   while( peak1.available() == 0 );
+   peak1.read();
+   while( peak1.available() == 0 );
+   peak1.read();
+   while( peak1.available() == 0 );
+   Serial.println(10*peak1.read());
+   si5351bx_setfreq(2,7255000+IF);
+   delay(6);
+   while( peak1.available() == 0 );
+   peak1.read();
+   set_volume(volume_);
+}
+
 #endif
