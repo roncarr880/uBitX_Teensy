@@ -111,7 +111,10 @@
  *           Wired the Pickit interface such that Data and Clock line up which put Vpp, Vcc and Ground on the I/O lines of 
  *           RB0-RB2.  So this method lost the 3 I/O lines and required leaving the one pin where Vpp connected out of the socket.
  *      Added an S meter using an image converted with 565 online image converter by Rinky Dink Electronics.
- *      Added a way to override 5 watt DIGI power and allow full power if desired, so non-qrp DIGI mode.  15 12 and 10 will still be < 5 watts.
+ *      Added a way to override 5 watt DIGI power and allow full power if desired, so a non-qrp DIGI mode.  
+ *        15 12 and 10 will still be < 5 watts.
+ *      Added AGC.  Changed volume to range to 0.99, no gain.  Think following BiQuad distorts on loud signals if volume is 1.0 or above.
+ *        Gain boosted with agc_gain now. 
  *      
  *  To do.
  *      Review power levels again.  I twiddled the MIC gain pot a bit to make sure it was in a linear range.
@@ -350,12 +353,18 @@ uint8_t key_mode = ULTIMATIC;
 int  cw_practice = 1;               // toggle and multi fun variables must be int, have value 0 to 99.
 int  key_swap = 0;
 int  wpm = 14;
-int  volume_ = 10;                  // actual * 0.1   Digital gain range 0 to 10
+int  volume_ = 98;                  // actual * 0.01
 int  clari  = 50;                   // adjustment for temperature changes, maps to +-50 hz
 int  tuning;                        // low power tune via sidetone object
 int side_vol = 10;                  // sidetone volume
 uint8_t oob;                        // out of band flag, don't save vfo's to the bandstack.  Don't transmit.
-int  digi5w = 1;                    // use the digi power levels in the bandstack for digi power
+int digi5w = 1;                     // use the digi power levels in the bandstack for digi power
+int dis_info;                       // display some information in Smeter area
+int lock;                           // lock vfo, allow CAT freq changes
+int agc_gain = 25;                  // agc gain 0 to 9.9 with 10 == 1.0
+float sig_rms;                      // global so can print
+float agc_sig;                      // glabal so can print
+float agc_print;
 
 
 //   Touch menu's
@@ -481,13 +490,14 @@ const char mf_bf[] = " Clarify";       // +- 50 hz for drift due to temperature
 const char mf_ks[] = " Key Spd";
 const char mf_tr[] = " cwDelay";       // 0-99 maps to 0 to 990 ms, min value is 100
 const char mf_sv[] = " SideVol";       // sidetone volume
+const char mf_ag[] = " AGC Vol";       // agc gain
 // PWM audio volume
 
 struct multi multi_fun_data = {
    " Multi Adj  (exit)",
-   5,
-   { mf_vl, mf_bf, mf_ks, mf_tr, mf_sv },
-   { &volume_, &clari, &wpm, &cw_tr_delay, &side_vol },
+   6,
+   { mf_vl, mf_ag, mf_bf, mf_ks, mf_tr, mf_sv },
+   { &volume_, &agc_gain, &clari, &wpm, &cw_tr_delay, &side_vol },
    0
 };
 
@@ -496,12 +506,14 @@ const char tt_kp[] = "Practice";
 const char tt_ft[] = "Fast Vfo";
 const char tt_tt[] = "ATU TUNE";
 const char tt_d5[] = "Digi  5W";
+const char tt_di[] = "Info Dis";
+const char tt_lk[] = "Lock VFO";
 
 struct multi toggles_data = {
    " Toggle Values",
-   5,
-   { tt_ks, tt_kp, tt_ft, tt_tt, tt_d5 },
-   { &key_swap, &cw_practice, &fast_tune, &tuning, &digi5w },
+   7,
+   { tt_ks, tt_kp, tt_ft, tt_tt, tt_d5, tt_di, tt_lk },
+   { &key_swap, &cw_practice, &fast_tune, &tuning, &digi5w, &dis_info, &lock },
    2
 };
 
@@ -594,7 +606,7 @@ void setup() {
 
     MIC.analogReference(INTERNAL);      // 1.2 volt p-p
 
-    AGC.gain( 1.0 );                    // default signal pass through until agc loop takes over
+    AGC.gain( (float)(agc_gain)/10.0 );   // default signal pass through until agc loop takes over
     BandWidth.setHighpass( 0, 200, 0.707 );
     BandWidth.setLowpass( 1, 3200, 0.707 );
 
@@ -612,12 +624,17 @@ int t2;
 
    t2 = encoder();
    if( t2 ){
-      if( screen_owner == DECODE ) freq_update( t2 );   // this is kind of a sticky tuning rate effect, see if like this
+      if( screen_owner == DECODE && lock == 0 ) freq_update( t2 );
       if( screen_owner == MULTI ) multi_fun_encoder( t2 );
    }
 
    t = touch();
    if( t ) (*menu_dispatch)(t);             // off to whoever owns the touchscreen
+
+   if( rms1.available() ){                  // agc
+        sig_rms = rms1.read();
+        agc_process( sig_rms);
+   }
 
 
    //  One ms processing
@@ -639,6 +656,50 @@ int t2;
    if( screen_owner == DECODE ) info_corner();
    
 }
+
+
+
+#define AGC_FLOOR  0.20             // 0.15 0.05
+#define AGC_SLOPE  9                // 6
+#define AGC_HANG   500              //  hang == ms time
+void agc_process( float reading ){
+//static float sig = AGC_FLOOR;
+static int hang;
+float g, g2;
+int ch;                             // flag change needed
+static int again;
+
+    ch = 0;
+
+    if( again != agc_gain ) again = agc_gain, ch = 1;     // implement gain changes when signal is below floor
+    
+    if( reading > agc_sig && reading > AGC_FLOOR ){       // attack 0.001
+       agc_sig += 0.009,  hang = 0, ch = 1;
+    }
+    else if( agc_sig > AGC_FLOOR && hang++ > AGC_HANG/3 ){  // decay
+       agc_sig -= 0.0001, ch = 1;
+    }
+
+    if( ch ){                             // change needed
+      g2 = (float)agc_gain / 10.0;
+      g = agc_sig - AGC_FLOOR;
+      g *= AGC_SLOPE;
+      g = g2 - g;                         // agc action reduces gain from the set value agc_gain 
+      if( g <= 0 ) g = 0.1;
+      set_agc_gain(g);
+    }                                               
+
+}
+
+void set_agc_gain(float g ){
+
+  //g = g * (float)agc_gain / 10.0;
+  AudioNoInterrupts();
+    AGC.gain(g);
+  AudioInterrupts();
+  agc_print = g;
+}
+
 
 
 #define TUNE_OFF 10000       // 10000 is 10 seconds
@@ -681,7 +742,7 @@ static int mod;
     val2 = peak1.read();
     if( val2 > val3 ) val3 = val2;
 
-    if( ++mod == 40 ){
+    if( ++mod >= 40 && dis_info ){
        mod = 0;
        tft.setTextSize( 1 );
        tft.setTextColor(EGA[10], EGA[0] );
@@ -690,6 +751,11 @@ static int mod;
        tft.setCursor( 280, 80+ 1*ls );
        val = (float)AudioProcessorUsage() / 100.0 ;
        tft.print( val );
+
+       tft.setCursor( 254, 80 + 2*ls );
+       tft.print("AGC ");
+       tft.setCursor( 280, 80 + 2*ls );
+       tft.print( agc_print );
 
        tft.setCursor( 254, 80 );                       // displaying top line last for color changes
        tft.print("Sig ");
@@ -982,21 +1048,28 @@ void menu_cleanup(){
    sig_pwr_meter( -1.0 );           // reset meter to zero
 }
 
-// !!! this function name should be different as function does more now than just the mf bar on the left side of the screen
+// a mf bar on the left side of the screen grew into a full Smeter display
 void mf_bar_disp(){                 // display a bar on left side to show a menu exists there
 const char msg[]  = "Multi Fun";    // also add some other boxes for menu hotspots, the hidden menu is no longer hidden
 const char msg2[] = "Band";
 const char msg3[] = " Toggles ";
 int i;
+uint16_t c;
+
+   c = ( transmitting ) ? EGA[12] : EGA[4];          // brighter red for transmitting
+   tft.drawLine(0,69,319,69,c);
+   tft.drawLine(0,70,319,70,c);
+   tft.drawLine(0,169,319,169,c);
+   tft.drawLine(0,170,319,170,c);
 
    tft.setTextSize(1);
    tft.setTextColor(EGA[15]);
-   tft.fillRect( 0,70,8,100,EGA[4] );           // multi function
+   tft.fillRect( 0,70,8,100,c );           // multi function
    for( i = 0; i < 9; ++i ){
       tft.setCursor( 1, 77+10*i );
       tft.write( msg[i] );
    }
-   tft.fillRect( 319-8,70,8,100,EGA[4] );       // toggles
+   tft.fillRect( 319-8,70,8,100,c );       // toggles
    for( i = 0; i < 9; ++i ){
       tft.setCursor( 319-7, 77+10*i );
       tft.write( msg3[i] );
@@ -1007,8 +1080,8 @@ int i;
    //tft.writeRect(9, 72, 182, 98, (uint16_t*)smeter2);
    //tft.writeRect(9, 72, 208, 98, (uint16_t*)smeter3);
    //tft.writeRect(9, 72, 208, 98, (uint16_t*)smeter4);
-   tft.writeRect(9, 72, 234, 96, (uint16_t*)smeter5);      // bottom two lines left off for divider box lines
-   tft.fillRect( 148,65,32,8,EGA[4] );           // band select
+   tft.writeRect(43-34*dis_info, 72, 234, 96, (uint16_t*)smeter5);      // bottom two lines left off for divider box lines, centered or left
+   tft.fillRect( 148,65,32,8,c );           // band select
    tft.setCursor( 153,65 );
    tft.print( msg2 );                            // overwrites part of the smeter
    /**********
@@ -1023,7 +1096,7 @@ int i;
 // non-log meter unless convert the value before calling,  value is 0 to 1.0 for zero to full scale. 
 // on rx, more of an indication of the input to the A/D converter than S signal value
 void sig_pwr_meter( float val ){                // move the indicator bar around with a sprite
-const int sx = 40;
+int sx = 40;
 const int sy = 131;                                    // zero position
 static int pos;                                        // current x position
 static int mod;                                        // slow down the fall of the meter
@@ -1044,6 +1117,7 @@ int i;                                   // loop 3 times for faster response on 
         return;
     }
 
+    if( dis_info == 0 ) sx += 34;        // 34 == difference between centered meter and meter on left side
     for( i = 0; i < 3; ++i ){
        // where should the indicator be.  Move one pixel at a time.
        r = 1;
@@ -1171,7 +1245,7 @@ int i;
   sel = 0;                               // assume normal SSB DIGI
   if( vfo_mode & VFO_AM ) sel = 3;
   // else if notch/nr sel = 2;
-  g = 0.1 * (float)vol;                  // 0 to 99 mapped to 0.0 to 9.9
+  g = 0.01 * (float)vol;                  // 0 to 99 mapped to 0.0 to 0.99
   RX_SEL.gain(sel,g);
   
   for( i = 0; i < 4; ++i ){              // turn off other volume sources
@@ -1575,17 +1649,6 @@ int32_t as;
    tft.setTextColor(EGA[4+r],0);
    tft.print("DIGI");
     
-   tft.drawLine(0,69,319,69,EGA[4]);                 // 64
-   tft.drawLine(0,70,319,70,EGA[4]);
-   tft.drawLine(0,169,319,169,EGA[4]);
-   tft.drawLine(0,170,319,170,EGA[4]);
-   
-//   if( decode_menu_data.current != DHELL ){
-//      tft.drawLine(0,128,319,128,EGA[4]);
-//      tft.drawLine(0,129,319,129,EGA[4]);
-//   }
-
-
 }
 
 
@@ -1998,16 +2061,18 @@ void tx_rx_seq(){
 
      if( transmitting < 50 ) ++transmitting;
      
-     if( transmitting > 0 ){                                            // changing from RX to TX
+     if( transmitting > 0 ){         // changing from RX to TX
         if( transmitting == 48 ){
            if( (vfo_mode & VFO_CW) && tuning == 0 ) si5351bx_setfreq( 2, vfo_b - 600 );
            else si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ) );
+           mf_bar_disp();            // Smeter area in RED as transmitter on indication
         }
      }
      else{                           // TX to RX
         if( transmitting == 0 ){
            if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
            else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
+           mf_bar_disp();            // Smeter area in muted red
         }
      } 
 }
@@ -2247,6 +2312,7 @@ static float vals[40];
 
 }
 
+// the idea here was to mute the rx, tune to another freq, take a measurement of the level, return to rx frequency, unmute, plot band scan.
 void band_scan(){
 static int t;
 
