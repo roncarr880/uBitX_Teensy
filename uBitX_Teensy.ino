@@ -52,14 +52,24 @@
  *      Maybe can run a divider of 12.  900/12 = 75.  600/12 = 50.  48*12 = 575 - so 80 meters runs PLL slightly out of spec.
  *      The existing Si5351 scheme seems to work ok, may not implement this idea.  
  *      
- *      ATU board.   An ATU-100 mini clone from uSDX SOTA radio.
- *        Probably will want to run the I2C through a level converter and run the PIC on the ATU at 5 volts.   
- *        Mounting will be tight.  Maybe just mount using a bnc on the back panel. 
- *        A connector exists to pick up RF on the main board. Will need to wire 5 volts and I2C.
- *        Maybe can separate 5 volt runs so the PIC can run with the relays off, relays only on during TX like the rest of the radio.
- *          Or would need to use I2C to tell ATU to set the relays. 
- *        Poll during TX to display the FWD and REF power.  Could display the L and C also.  
- *        Top cover 1/4 inch higher may be needed for space to mount the ATU.
+ *    ATU board.   An ATU-100 mini clone from uSDX SOTA radio.
+ *      With a 18F2220, communication will be serial instead of the original plan of I2C.
+ *      May or may not use a level converter.  For a Teensy 4.1 project would need a level converter.
+ *      Mounting will be tight.  Maybe just mount using a bnc on the back panel. 
+ *        A connector exists to pick up RF on the main board. 
+ *      Poll during TX to display the FWD and REF power.  Could display the L and C also.
+ *      ATU commands using serial.  
+         Z  -  Zero relays, keep current data.  Bypass mode.
+         O  -  On, apply relays
+         S  -  Set relay data Cval Lval ( wait for O command to apply )
+         R  -  Report relay values  Cval Lval
+         P  -  Report Fwd and Rev Power. Fwd, Rev, in 16 bit.  Dynamic values, a new fwd, rev measurement is made. 
+         W  -  Report sWr. Static value of the result of the last tune command.
+         T  -  Tune ( return T swr )
+         C D   Inc or Dec Cval
+         L M   Inc or Dec Lval
+         H  -  Toggle Cap to Low Z or High Z side of L
+
  *        
  *      Could construct a Teensy 4.1 version  ( make sure all pullups to 5 volts removed )
  *        Use the Teensy audio shield.  Ordered a Softrock with K2 IF, about 4.914 mhz.  Can receive using the IQ DSP and transmit using 
@@ -114,7 +124,10 @@
  *      Added a way to override 5 watt DIGI power and allow full power if desired, so a non-qrp DIGI mode.  
  *        15 12 and 10 will still be < 5 watts.
  *      Added AGC.  Changed volume to range to 0.99, no gain.  Think following BiQuad distorts on loud signals if volume is 1.0 or above.
- *        Gain boosted with agc_gain now. 
+ *        Gain boosted with agc_gain now.
+ *      Re-wired two connections to free up Teensy pins 0 and 1 for the ATU serial port. Used pins A6 and A7. 
+ *        Added a connector for the ATU with connections, NC +5 Gnd Rx Tx to go to the ATU Pickit connector vpp +5 gnd data clock.
+ *        Added a 1000uf cap +5 to Gnd under the Teensy 3.1.
  *      
  *  To do.
  *      Review power levels again.  I twiddled the MIC gain pot a bit to make sure it was in a linear range.
@@ -135,11 +148,12 @@
  *      Terminal Mode.
  *      The touch calibration is from a previous project, seems to be working ok but could be reviewed. 
  *      CW decoder.   Hell decoder.
- *      Audio scope, audio FFT displays.  Band scope by scanning? ( mute, scan one freq, return vfo, unmute )
+ *      Audio scope, audio FFT displays.  
+ *      Amp for the internal speaker.  Function lost when removed the LM386. Voltage gain not needed, just power I think.
+ *      Band scope by scanning? ( mute, scan one freq, return vfo, unmute ) THIS idea didn't work well.
  *      Noise reduction, auto notch.
  *      CW filters.   SSB high cut filter for QRM reduction. 
  *      Transmit timout timer, in case miss the CAT command to return to RX.  Maximum tx on time.  
- *      ATU firmware. 
  *      Some pictures for documentation.
 */         
 
@@ -155,7 +169,7 @@
 //    Uses pins 8 to 13 wired to Nano pins 8 to 13
 //  I2C uses the standard A4 A5, so they are wired to Nano A4 A5
 //  The keyer will make use of the PTT pin as either DIT or DAH - digital keyer inputs instead of one analog pin
-//  Teensy free pins A6, A7
+//  Teensy free pins, A3. 
 
 #define TR        7     // to nano pin 7
                         // nano pin 6 CW_TONE not wired
@@ -166,11 +180,12 @@
 #define DIT_pin  A1     // to nano pin A6  - was KEYER,  short a resistor on main board, remove pullup to 5 volts.
 #define DAH_pin  A0     // to nano pin A3
 #define PTT      A0     // same pin as DAH_pin,  ptt wired over to the key jack, remove a resistor on the main board
-#define ENC_B     0     // to nano A0   These are the Teensy digital pins not the analog pins for the encoder
-#define ENC_A     1     // to nano A1
+#define ENC_B    A7     // to nano A0
+#define ENC_A    A6     // to nano A1
 #define ENC_SW    2     // to nano A2
 
-// Teensy pins 3 and 4 are audio library pwm output pins.  A14 is the DAC. 
+// Teensy pins 3 and 4 are audio library pwm output pins.  A14 is the DAC.
+// Teensy pins 0 and 1 are the RX and TX for Serial1.  Connected to the built in ATU. If using a Teensy 4.1 would need a level converter. 
 
 /* button states */
 #define IDLE_ 0
@@ -208,6 +223,8 @@ const uint16_t EGA[] = {
 #define TFT_CS 10
 ILI9341_t3 tft = ILI9341_t3(TFT_CS, TFT_DC);
 XPT2046_Touchscreen ts(8);
+
+#define ATU  Serial1
 
 /*****************************   Audio Library **********************************/
 
@@ -363,8 +380,9 @@ int dis_info;                       // display some information in Smeter area
 int lock;                           // lock vfo, allow CAT freq changes
 int agc_gain = 25;                  // agc gain 0 to 9.9 with 10 == 1.0
 float sig_rms;                      // global so can print
-float agc_sig;                      // glabal so can print
+// float agc_sig = 0.20;               // glabal so can print, init at floor
 float agc_print;
+uint8_t t_swr;                      // swr value returned from ATU
 
 
 //   Touch menu's
@@ -544,6 +562,7 @@ void setup() {
   digitalWriteFast( CW_KEY, LOW );
 
   Serial.begin(1200);                    // 2 meg usb serial, baud rate makes no difference.  Argonaut V baud rate.
+  ATU.begin(1200);                   // ATU
 
   pinMode( ENC_A,   INPUT_PULLUP );
   pinMode( ENC_B,   INPUT_PULLUP );
@@ -612,7 +631,8 @@ void setup() {
 
 
     AudioInterrupts();
-  
+
+    ATU.write('S'); ATU.write(0); ATU.write(0); ATU.write('Z');
 
 }
 
@@ -654,8 +674,39 @@ int t2;
    radio_control();                         // CAT
    check_ptt();
    if( screen_owner == DECODE ) info_corner();
+   if( tuning == 0 && ATU.available() ) atu_response();
    
 }
+
+
+void atu_response(){                     // do something with the data returned by the ATU
+static uint8_t st;
+static char cmd;
+uint8_t  c;
+
+   c = ATU.read();
+
+   if( st == 0 ){
+      cmd = c;
+      switch( cmd ){
+          case 'R':   st = 2;  break;
+      }
+      Serial.write( cmd ); Serial.write(' ');
+      tft.setTextSize(2);
+      tft.setCursor(10,210);
+      tft.write( cmd ); tft.write(' ');
+   }
+   else{
+      --st;                                // !!! mostly. debug just print the results on serial
+      tft.setTextSize(2);
+      tft.setCursor(160-120*st,210);
+      tft.print(c,BIN);
+      Serial.print( c, BIN );
+      Serial.write(' ');
+      if( st == 0 ) Serial.println();
+   }
+}
+
 
 
 
@@ -663,7 +714,7 @@ int t2;
 #define AGC_SLOPE  9                // 6
 #define AGC_HANG   500              //  hang == ms time
 void agc_process( float reading ){
-//static float sig = AGC_FLOOR;
+static float agc_sig = AGC_FLOOR;
 static int hang;
 float g, g2;
 int ch;                             // flag change needed
@@ -702,28 +753,55 @@ void set_agc_gain(float g ){
 
 
 
-#define TUNE_OFF 10000       // 10000 is 10 seconds
+#define TUNE_OFF 15000       // 10000 is 10 seconds
 void tune(){          // enable a low power tune signal via DAC and SideTone object.  Sequence and timeout.
                       // called once per millisecond
+static uint8_t c1;
+uint8_t c;
+                    
     ++tuning;
     if( tuning < 0 ) tuning = TUNE_OFF;
     switch( tuning ){
         case  2:
            tx();
+          // ATU.write('T');                // !!! may want to have a tuner disabled state
+         // ATU.write('O');
+         // ATU.write('P');            // !!! get idle reading with current solution enabled
+           c1 = 0;
+           t_swr = 0;                         // 0.0 for when no tuner installed
         break;
         case 50:                              // enable the sidetone after relays have switched
           // si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 )); handled in tx sequencer
            SideTone.frequency(1500);
            SideTone.amplitude(0.99);
-           TX_SEL.gain(0,0.25);                // set mic level pot on 17 meters, 15m - 10m will be lower than other bands
+           TX_SEL.gain(0,0.25);                     // set mic level pot on 17 meters, 15m - 10m will be lower than other bands
+           //if( band <= 3 ) TX_SEL.gain(0,0.90);      // !!! more power for 40 meters and under
            //TX_SEL.gain(0,(float)side_vol/100.0);    // !!! testing only, side_vol is the audio sidetone during CW tx
         break;
+     case 100:    // debug get some info from the ATU
+        ATU.write('P');     // get fwd rev for passthrough
+        ATU.write('O');     // enable current solution
+        ATU.write('P');     // get fwd rev for current solution
+        ATU.write('T');     // start tune late !!!
+     break;
         case TUNE_OFF:                        // timeout at nn seconds
            tuning = 0;
            rx();
         break;
-        default:                              // check if have 1:1 match and end early ?
+        default:                              // check if have response from ATU and end early
+             if( ATU.available() ){
+                c = ATU.read();
+                if( c1 == 0 && c == 'T' ) c1 = c;
+                else if( c1 == 'T' )  t_swr = c, tuning = -5;         // atu done, returned 'T swr' response
+                Serial.print(c,HEX);   // !!! just debug
+                Serial.write(' ');
+             }
         break;
+    }
+
+    if( tuning < 0 ){
+       Serial.println();
+       ATU.write('R');                // get solution
     }
   
 }
@@ -752,10 +830,17 @@ static int mod;
        val = (float)AudioProcessorUsage() / 100.0 ;
        tft.print( val );
 
-       tft.setCursor( 254, 80 + 2*ls );
-       tft.print("AGC ");
+       tft.setCursor( 254, 80 + 2*ls );                // agc amp gain.  needs to be < 1.0 on strong signals
+       tft.print("agc ");                              // adjust agc_gain in multi fun or the volume pot for signal into DSP
        tft.setCursor( 280, 80 + 2*ls );
        tft.print( agc_print );
+
+       tft.setCursor( 254, 80 + 3*ls );                // ATU errors reported as swr values
+       tft.print("swr ");                              // 25.0 - REV > FWD
+       tft.setCursor( 280, 80 + 3*ls );                // 25.1 - (divide by zero)  REV = FWD
+       val = (float)t_swr/10.0;                        // 25.2 - swr > 25.5 ( divide result more than 8 bits )
+       if( val < 10.0 ) tft.print(val,2);              // 25.3 - timeout.  No signal detected. 
+       else tft.print(val,1);
 
        tft.setCursor( 254, 80 );                       // displaying top line last for color changes
        tft.print("Sig ");
@@ -2133,6 +2218,7 @@ void rx(){
   TX_SEL.gain(1,0.0);
 
   set_volume( volume_ );
+  ATU.write('Z');                                    // ATU in standby
   
 }
 
@@ -2146,6 +2232,7 @@ float pwr;
      return;
   }
 
+  if( tuning == 0 ) ATU.write('O');         // atu relay enable.  when tuning ATU is controlled elsewhere. 
   set_volume( 0 );                          // mute rx
   transmitting = 1;
   si5351bx_setfreq( 2, 0 );                 // vfo off for rx to tx switch

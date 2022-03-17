@@ -3,6 +3,7 @@
 /*
     Proposed commands on serial, should all commands have a response ?
   Z  -  Zero relays, keep current data.  Bypass mode.
+  X  -  Set Quick solution relays.  Max 3 on.
   O  -  On, apply relays
   S  -  Set relay data Cval Lval ( apply or wait for O command? )
   R  -  Report relay values  Cval Lval
@@ -30,8 +31,8 @@
 #define B6  0x40
 #define B7  0x80
 
-#define ADRIGHT 0x80           /* use as 8 bit result */
-#define ADLEFT  0x00           /* use as 10 bit result */
+#define ADRIGHT 0x80           /* left or right justification of A/D result */
+#define ADLEFT  0x00
 
 /*   #pragma pic 504
      char stack[8];   not using this */
@@ -47,6 +48,10 @@ char _eedata;
 char Cvals;         /* straight data 7 bits, will need to be dispersed to the correct port,bit */
 char Lvals;
 char Hval;
+
+char QC;            /* the quick solution, use for RX for minimum relay current */
+char QL;
+char QH;
 
 /*********
 char Pa;            /*  Ports for relay bits 
@@ -105,10 +110,11 @@ static char temp;
 
 /*********
   Z  -  Zero relays, keep current data.  Bypass mode.
+  X  -  Set Quick solution relays.  Max 3 on.
   O  -  On, apply relays
   S  -  Set relay data Cval Lval ( apply or wait for O command? )
   R  -  Report relay values  Cval Lval
-  P  -  Report Fwd and Rev Power. Fwd, Rev, upper or lower bits in 3rd value returned.
+  P  -  Report Fwd and Rev Power. Fwd, Rev, in 16 bit.
   W  -  Report sWr
   T  -  Tune ( return a done value ? )
   C D   Inc or Dec Cval
@@ -121,6 +127,7 @@ static char temp;
       temp = get_rx();
       switch( temp ){
          case 'Z':  bypass();   break;      /* relays off, save current setting */
+         case 'X':  write_quick();  break;  /* quick solution on */
          case 'O':  write_vals(); break;    /* relays on */
          case 'S':  set_vals(); /*write_vals();*/  break;    /* new relay data from host */
          case 'R':  report_vals(); break;   /* send relay settings to host */
@@ -149,6 +156,23 @@ static char h;
     tl = Lvals;
     h = Hval;
     Hval = Cvals = Lvals = 0;
+    write_vals();
+    Cvals = tc;
+    Lvals = tl;
+    Hval = h;
+}
+
+write_quick(){          /* set the quick solution value */
+static char tc;
+static char tl;
+static char h;
+
+    tc = Cvals;         /* save current settings */
+    tl = Lvals;
+    h = Hval;
+    Hval = QH;
+    Cvals = QC;
+    Lvals = QL;
     write_vals();
     Cvals = tc;
     Lvals = tl;
@@ -197,15 +221,15 @@ tune(){
 
 }
 
-Qtune(){                 /* shift a bit across L and C, should take 1 second */
-static char swrq;
+Qtune(){                 /* shift a bit across L and C, should take 1 second ( 7*7*2*10ms ) */
+static char swrq;        /* this algorithm misses trying zero C with L values and zero L with C values */
 static char L,C,H;
 
-   swrq = 99;
+   swrq = 249;
    L = C = H = 0;
-   Cvals = C;
-   Lvals = L;
-   Hval = H;
+   QC = Cvals = C;
+   QL = Lvals = L;
+   QH = Hval = H;
    write_vals();      /* get a base reading of passthrough */
    get_swr();
    swrq = swr;
@@ -232,12 +256,12 @@ static char L,C,H;
             swrq = swr;
          }
       }
-      if( thigh >= 4 || swrq <= 15 ) break;      /* how low a swr expected from quick algorithm? */
+      if( thigh >= 4 || swrq <= 13 ) break;      /* how low a swr expected from quick algorithm? */
    }
-   /* apply best so far */
-   Cvals = C;
-   Lvals = L;
-   Hval = H;
+   /* apply best so far, save quick solution */
+   QC = Cvals = C;
+   QL = Lvals = L;
+   QH = Hval = H;
    write_vals();
    swr = swrq;  
 }
@@ -260,7 +284,7 @@ static char BC;
    if( thigh >= 4 ){            /* timeout, use best known so far */
      Cvals = C;
      Lvals = L;
-    /* Hval = H;                   redundant as not changing H here */
+    /* Hval = H;                not changing H in fine tune */
      write_vals();     
      return;
    }
@@ -320,7 +344,7 @@ init(){
 
    /* init variables that need init values */
    rx_in = rx_out = tx_in = tx_out = 0;
-   Cvals = Lvals = 0;
+   Hval = Cvals = Lvals = 0;
    rstate = tstate = 0;
 
 
@@ -331,6 +355,7 @@ init(){
    PIE1 = B1;                /* interrupts at 139 * 4 / 2 ==  278 us, can do 556 instructions at 8 mhz clock */
    T2CON = B0 + B2;          /* prescale by 4, on bit  B0 + B2 */
    interrupts();
+   write_vals();             /* clear ports */
 
 }
 
@@ -540,9 +565,11 @@ no_interrupts(){
 }
 
 ad_sample( char just ){
+static char i;
 
-  ADCON2 = just + 0x25;    /* 8 tad sample, tad is 16 divider of 8 meg clock, 2us */
-  ADCON0 = 1;              /* on sample chan 0 */
+  ADCON2 = just + 0x25;       /* 8 tad sample, tad is 16 divider of 8 meg clock, 2us */
+  ADCON0 = 5;                 /* on sample chan 1.  Fwd Rev swapped with my 2nd try at a bridge */
+  for( i = 0; i < 5; ++i );   /* delay */
   #asm
     bsf ADCON0,1
   #endasm
@@ -550,7 +577,8 @@ ad_sample( char just ){
   fwdh = ADRESH;
   fwdl = ADRESL;
 
-  ADCON0 = 5;
+  ADCON0 = 1;                 /* chan 0 */
+  for( i = 0; i < 5; ++i );   /* delay */
   #asm
     bsf ADCON0,1
   #endasm
@@ -568,7 +596,7 @@ static char fwd;
      if( ++tlow == 0 ) ++thigh;
      ad_sample( ADRIGHT );
      if( fwdh == 0 ) fwd = fwdl;     /* see if have a reading */
-     else fwd = 99;
+     else fwd = 99;                  /* just any value > 4 to exit this loop */
      if( fwd < 4 ) delay( 10 );
      if( thigh >= 4 ){
         swr = 253;
