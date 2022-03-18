@@ -34,6 +34,8 @@
 #define ADRIGHT 0x80           /* left or right justification of A/D result */
 #define ADLEFT  0x00
 
+#define MATCH 12               /* antenna matched swr * 10 */
+
 /*   #pragma pic 504
      char stack[8];   not using this */
 #pragma pic 0
@@ -85,6 +87,9 @@ char divi;
 char divql;
 char divqh;
 
+/*  make these common variable names global in access page, should result in less banking changes */
+char Cp,L,H;      /* C is reserved by assembler */
+char swrq;
 
 
 
@@ -215,99 +220,177 @@ tune(){
       put_tx( swr );
       return;
    }
-   if( swr > 13 ) Ftune();     /* swr scaled by 10 */
+   if( swr > MATCH ) Ftune();     /* swr scaled by 10 */
    put_tx('T');
    put_tx(swr);
 
 }
 
 Qtune(){                 /* shift a bit across L and C, should take 1 second ( 7*7*2*10ms ) */
-static char swrq;        /* this algorithm misses trying zero C with L values and zero L with C values */
-static char L,C,H;
+/*static char swrq;*/
+/*static char L,C,H;  */     /* wear leveling of relays version, L in outer loop, then C in outer loop */
+                         /* test all combinations of one L and one C relay with caps on antenna side and PA side */
 
-   swrq = 249;
-   L = C = H = 0;
-   QC = Cvals = C;
-   QL = Lvals = L;
-   QH = Hval = H;
-   write_vals();      /* get a base reading of passthrough */
+   /* swrq = 249; */
+   QC = Cvals = Cp = 0;
+   QL = Lvals = L = 0;
+   QH = Hval  = H = 0;
+   write_vals();         /* get a base reading of passthrough */
    get_swr();
    swrq = swr;
-   if( thigh >= 4 || swr <= 13 ) return;
+   if( thigh >= 4 || swr <= MATCH ) return;     /* antenna matched without tuner */
 
+   /* just L relays , zero C */
    for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
+      write_vals();
+      get_swr();
+      if( swr < swrq ){       /* save best results so far */
+         L = Lvals;
+         Cp = Cvals;
+         H = Hval;
+         swrq = swr;
+      }
+   }
+
+   /* just C relays , zero L */
+   if( thigh < 4 && swrq > MATCH ){
+      Lvals = 0;
       for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
-         Hval = 0;
          write_vals();
          get_swr();
-         if( swr < swrq ){
+         if( swr < swrq ){       /* save best results so far */
             L = Lvals;
-            C = Cvals;
-            H = 0;
-            swrq = swr;
-         }
-         Hval = 128;            /* caps other side of L */
-         write_vals();
-         get_swr();
-         if( swr < swrq ){
-            L = Lvals;
-            C = Cvals;
-            H = 128;
+            Cp = Cvals;
+            H = Hval;
             swrq = swr;
          }
       }
-      if( thigh >= 4 || swrq <= 13 ) break;      /* how low a swr expected from quick algorithm? */
    }
-   /* apply best so far, save quick solution */
-   QC = Cvals = C;
+
+   if( thigh < 4 && swrq > MATCH ){
+      Hval = 0;                     /* caps on PA side, low Z */
+      for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
+         for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
+            write_vals();
+            get_swr();
+            if( swr < swrq ){       /* save best results so far */
+               L = Lvals;
+               Cp = Cvals;
+               H = Hval;
+               swrq = swr;
+            }
+         }
+         if( thigh >= 4 || swrq <= MATCH ) break;
+      }
+   }
+
+   if( thigh < 4 && swrq > MATCH ){
+      Hval = 128;                   /* caps on Antenna side, high Z */
+      for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
+         for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
+            write_vals();
+            get_swr();
+            if( swr < swrq ){
+               L = Lvals;
+               Cp = Cvals;
+               H = Hval;
+               swrq = swr;
+            }
+         }
+         if( thigh >= 4 || swrq <= MATCH ) break;
+      }
+   }
+
+   /* apply best, save quick solution */
+   QC = Cvals = Cp;
    QL = Lvals = L;
    QH = Hval = H;
    write_vals();
    swr = swrq;  
 }
 
-Ftune(){                   /* fine tune near the quick tune result, power 2 below to power 2 above */
-static char swrq;
-static char L,C,H;
-static char EL, EC;
-static char BC;
+  /* a binary tuning algorithm, try above and below current quick tune values with decreasing offset */
+Ftune(){
+/*static char swrq;*/
+/*static char L,C;*/
+static char dv;                 /* delta value */
+static char ch;                 /* values changed */
 
-   L = Lvals;  C = Cvals;  H = Hval;
-   Lvals >>= 1;
-   Cvals >>= 1;
-   BC = Cvals;
-   EL = L << 1;
-   EC = C << 1;
-   write_vals();                /* starting swr */
+   L = Lvals;  Cp = Cvals;
+   /* swrq = swr; */
+   dv = 16;
+   /* ch = 0; */
+
+   write_vals();                /* starting swr is known but get it again */
    get_swr();
    swrq = swr;  
-   if( thigh >= 4 ){            /* timeout, use best known so far */
-     Cvals = C;
-     Lvals = L;
-    /* Hval = H;                not changing H in fine tune */
-     write_vals();     
-     return;
-   }
 
-   for( ; Lvals < EL;  ++Lvals ){
-      for( Cvals = BC; Cvals < EC; ++Cvals ){
+   while( dv ){
+      ch = 0;
+
+      /* try up L */
+      Lvals += dv;
+      if( Lvals < 128 ){
          write_vals();
          get_swr();
          if( swr < swrq ){
-            C = Cvals;
             L = Lvals;
+            ++ch;
             swrq = swr;
          }
-         if( thigh >= 4 || swrq <= 12 ) break;
       }
-      if( thigh >= 4 || swrq <= 12 ) break;
+      Lvals = L;
+
+      /* try down L */
+      Lvals -= dv;
+      if( Lvals < 128 ){            /* unsigned math */
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            L = Lvals;
+            ++ch;
+            swrq = swr;
+         }
+      }
+      Lvals = L;
+
+      /* try up C */
+      Cvals += dv;
+      if( Cvals < 128 ){
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            Cp = Cvals;
+            ++ch;
+            swrq = swr;
+         }
+      }
+      Cvals = Cp;
+
+      /* try down C */
+      Cvals -= dv;
+      if( Cvals < 128 ){            /* unsigned math */
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            Cp = Cvals;
+            ++ch;
+            swrq = swr;
+         }
+      }
+      Cvals = Cp;
+
+      if( ch == 0 ) dv >>= 1;
+      if( thigh >= 4 || swrq <= MATCH ) break;
    }
+
    swr = swrq;                /* write best */
-   Cvals = C;
+   Cvals = Cp;
    Lvals = L;
-   /* Hval = H;    */
    write_vals(); 
+
 }
+
 
 
 put_tx( char val ){
@@ -827,4 +910,97 @@ static char temp;                 /* set up INDF1 as a stack instead of statics 
 
 ******************************/
 
+/*
+
+Qtune_oldcode(){                 /* shift a bit across L and C, should take 1 second ( 7*7*2*10ms ) 
+static char swrq;        /* this algorithm misses trying zero C with L values and zero L with C values 
+static char L,C,H;
+
+   swrq = 249;
+   L = C = H = 0;
+   QC = Cvals = C;
+   QL = Lvals = L;
+   QH = Hval = H;
+   write_vals();      /* get a base reading of passthrough 
+   get_swr();
+   swrq = swr;
+   if( thigh >= 4 || swr <= 13 ) return;
+
+   for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
+      for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
+         Hval = 0;
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            L = Lvals;
+            C = Cvals;
+            H = 0;
+            swrq = swr;
+         }
+         Hval = 128;            /* caps other side of L 
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            L = Lvals;
+            C = Cvals;
+            H = 128;
+            swrq = swr;
+         }
+      }
+      if( thigh >= 4 || swrq <= 13 ) break;      /* how low a swr expected from quick algorithm? 
+   }
+   /* apply best so far, save quick solution 
+   QC = Cvals = C;
+   QL = Lvals = L;
+   QH = Hval = H;
+   write_vals();
+   swr = swrq;  
+}
+
+
+Ftune_old(){                   /* fine tune near the quick tune result, power 2 below to power 2 above 
+static char swrq;
+static char L,C,H;
+static char EL, EC;
+static char BC;
+
+   L = Lvals;  C = Cvals;  H = Hval;
+   Lvals >>= 1;
+   Cvals >>= 1;
+   BC = Cvals;
+   EL = L << 1;
+   EC = C << 1;
+   write_vals();                /* starting swr 
+   get_swr();
+   swrq = swr;  
+   if( thigh >= 4 ){            /* timeout, use best known so far 
+     Cvals = C;
+     Lvals = L;
+    /* Hval = H;                not changing H in fine tune 
+     write_vals();     
+     return;
+   }
+
+   for( ; Lvals < EL;  ++Lvals ){
+      for( Cvals = BC; Cvals < EC; ++Cvals ){
+         write_vals();
+         get_swr();
+         if( swr < swrq ){
+            C = Cvals;
+            L = Lvals;
+            swrq = swr;
+         }
+         if( thigh >= 4 || swrq <= 12 ) break;
+      }
+      if( thigh >= 4 || swrq <= 12 ) break;
+   }
+   swr = swrq;                /* write best 
+   Cvals = C;
+   Lvals = L;
+   /* Hval = H;    
+   write_vals(); 
+}
+
+
+***********/
 
