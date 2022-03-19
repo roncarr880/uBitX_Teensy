@@ -1505,7 +1505,8 @@ TOSU	equ 4095
 ; # define B7 0x80 
 ; # define ADRIGHT 0x80 
 ; # define ADLEFT 0x00 
-; # define MATCH 12 
+; # define MATCH 10 
+; # define QMATCH 14 
 ; # pragma pic 0 
 ; char _temp ; 
 _temp	equ 0
@@ -1572,12 +1573,17 @@ divi	equ 45
 divql	equ 46
 ; char divqh ; 
 divqh	equ 47
-; char Cp , L , H ; 
-Cp	equ 48
-L	equ 49
-H	equ 50
+; char Ct , Lt , Ht ; 
+Ct	equ 48
+Lt	equ 49
+Ht	equ 50
 ; char swrq ; 
 swrq	equ 51
+; char Cdv , Ldv ; 
+Cdv	equ 52
+Ldv	equ 53
+; char chg ; 
+chg	equ 54
 ; # pragma pic 256 
 ; main ( ) { 
 	;code
@@ -1893,10 +1899,10 @@ tune
 ; return ; 
 	return
 ; } 
-; if ( swr > 12  ) Ftune ( ) ; 
+; if ( swr > 10  ) Ftune ( ) ; 
 QMD54
 	movf	swr,W
-	addlw	244
+	addlw	246
 	btfss	STATUS,Z	;_JLE
 	btfss	STATUS,C
 	goto	QMD55
@@ -1912,19 +1918,19 @@ QMD55
 ; } 
 ; Qtune ( ) { 
 Qtune
-; QC = Cvals = Cp = 0 ; 
+; QC = Cvals = Ct = 0 ; 
 	movlw	0
-	movwf	Cp
+	movwf	Ct
 	movwf	Cvals
 	movwf	QC
-; QL = Lvals = L = 0 ; 
+; QL = Lvals = Lt = 0 ; 
 	movlw	0
-	movwf	L
+	movwf	Lt
 	movwf	Lvals
 	movwf	QL
-; QH = Hval = H = 0 ; 
+; QH = Hval = Ht = 0 ; 
 	movlw	0
-	movwf	H
+	movwf	Ht
 	movwf	Hval
 	movwf	QH
 ; write_vals ( ) ; 
@@ -1934,13 +1940,13 @@ Qtune
 ; swrq = swr ; 
 	movf	swr,W
 	movwf	swrq
-; if ( thigh >= 4 || swr <= 12  ) return ; 
+; if ( thigh >= 4 || swr <= 10  ) return ; 
 	movf	thigh,W
 	addlw	252
 	btfsc	STATUS,C
 	goto	QMD56
 	movf	swr,W
-	addlw	244
+	addlw	246
 	btfss	STATUS,Z	;_JG
 	btfss	STATUS,C
 	goto	_JG1
@@ -1948,276 +1954,85 @@ Qtune
 _JG1
 QMD56
 	return
-; for ( Lvals = 1 ; Lvals < 128 ; Lvals <<= 1 ) { 
+; for ( Cvals = 1 ; Cvals < 128 ; Cvals <<= 1 ) { 
 QMD57
 	movlw	1
-	movwf	Lvals
+	movwf	Cvals
 QMD58
-	movf	Lvals,W
+	movf	Cvals,W
 	addlw	128
 	btfsc	STATUS,C
 	goto	QMD60
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD61
-; L = Lvals ; 
-	movf	Lvals,W
-	movwf	L
-; Cp = Cvals ; 
-	movf	Cvals,W
-	movwf	Cp
-; H = Hval ; 
-	movf	Hval,W
-	movwf	H
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD61
-; } if ( thigh < 4 && swrq > 12  ) { 
-QMD59
-	bcf	STATUS,C
-	rlf	Lvals,F
-	goto	QMD58
-QMD60
-	movf	thigh,W
-	addlw	252
-	btfsc	STATUS,C
-	goto	QMD62
-	movf	swrq,W
-	addlw	244
-	btfss	STATUS,Z	;_JLE
-	btfss	STATUS,C
-	goto	QMD62
-; Lvals = 0 ; 
-;movlw	0
-	clrf 	Lvals
-; for ( Cvals = 1 ; Cvals < 128 ; Cvals <<= 1 ) { 
+; for ( Lvals = 1 ; Lvals < 128 ; Lvals <<= 1 ) { 
 	movlw	1
-	movwf	Cvals
-QMD63
-	movf	Cvals,W
+	movwf	Lvals
+QMD61
+	movf	Lvals,W
 	addlw	128
 	btfsc	STATUS,C
-	goto	QMD65
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD66
-; L = Lvals ; 
-	movf	Lvals,W
-	movwf	L
-; Cp = Cvals ; 
-	movf	Cvals,W
-	movwf	Cp
-; H = Hval ; 
-	movf	Hval,W
-	movwf	H
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD66
-; } } 
-QMD64
-	bcf	STATUS,C
-	rlf	Cvals,F
 	goto	QMD63
-QMD65
-; if ( thigh < 4 && swrq > 12  ) { 
-QMD62
-	movf	thigh,W
-	addlw	252
-	btfsc	STATUS,C
-	goto	QMD67
-	movf	swrq,W
-	addlw	244
-	btfss	STATUS,Z	;_JLE
-	btfss	STATUS,C
-	goto	QMD67
 ; Hval = 0 ; 
 ;movlw	0
 	clrf 	Hval
-; for ( Lvals = 1 ; Lvals < 128 ; Lvals <<= 1 ) { 
-	movlw	1
-	movwf	Lvals
-QMD68
-	movf	Lvals,W
-	addlw	128
-	btfsc	STATUS,C
-	goto	QMD70
-; for ( Cvals = 1 ; Cvals < 128 ; Cvals <<= 1 ) { 
-	movlw	1
-	movwf	Cvals
-QMD71
-	movf	Cvals,W
-	addlw	128
-	btfsc	STATUS,C
-	goto	QMD73
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD74
-; L = Lvals ; 
-	movf	Lvals,W
-	movwf	L
-; Cp = Cvals ; 
-	movf	Cvals,W
-	movwf	Cp
-; H = Hval ; 
-	movf	Hval,W
-	movwf	H
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD74
-; } if ( thigh >= 4 || swrq <= 12  ) break ; 
-QMD72
-	bcf	STATUS,C
-	rlf	Cvals,F
-	goto	QMD71
-QMD73
-	movf	thigh,W
-	addlw	252
-	btfsc	STATUS,C
-	goto	QMD75
-	movf	swrq,W
-	addlw	244
-	btfss	STATUS,Z	;_JG
-	btfss	STATUS,C
-	goto	_JG2
-	goto	QMD76
-_JG2
-QMD75
-	goto	QMD70
-; } 
-QMD76
-; } } 
-QMD69
-	bcf	STATUS,C
-	rlf	Lvals,F
-	goto	QMD68
-QMD70
-; if ( thigh < 4 && swrq > 12  ) { 
-QMD67
-	movf	thigh,W
-	addlw	252
-	btfsc	STATUS,C
-	goto	QMD77
-	movf	swrq,W
-	addlw	244
-	btfss	STATUS,Z	;_JLE
-	btfss	STATUS,C
-	goto	QMD77
+; Qtest ( ) ; 
+	call	Qtest
 ; Hval = 128 ; 
 	movlw	128
 	movwf	Hval
-; for ( Cvals = 1 ; Cvals < 128 ; Cvals <<= 1 ) { 
-	movlw	1
-	movwf	Cvals
-QMD78
-	movf	Cvals,W
-	addlw	128
-	btfsc	STATUS,C
-	goto	QMD80
-; for ( Lvals = 1 ; Lvals < 128 ; Lvals <<= 1 ) { 
-	movlw	1
-	movwf	Lvals
-QMD81
-	movf	Lvals,W
-	addlw	128
-	btfsc	STATUS,C
-	goto	QMD83
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD84
-; L = Lvals ; 
-	movf	Lvals,W
-	movwf	L
-; Cp = Cvals ; 
-	movf	Cvals,W
-	movwf	Cp
-; H = Hval ; 
-	movf	Hval,W
-	movwf	H
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
+; Qtest ( ) ; 
+	call	Qtest
 ; } 
-; } 
-QMD84
-; } if ( thigh >= 4 || swrq <= 12  ) break ; 
-QMD82
+QMD62
+; Lvals <<= 1 )  if ( swrq <= 14  && Ct > 1 ) break ; 
 	bcf	STATUS,C
 	rlf	Lvals,F
-	goto	QMD81
-QMD83
+	goto	QMD61
+QMD63
+	movf	swrq,W
+	addlw	242
+	btfss	STATUS,Z	;_JG
+	btfss	STATUS,C
+	goto	_JG2
+	goto	QMD64
+_JG2
+	movf	Ct,W
+	addlw	255
+	btfss	STATUS,Z	;_JLE
+	btfss	STATUS,C
+	goto	QMD64
+	goto	QMD60
+; if ( thigh >= 4 || swrq <= 10  ) break ; 
+QMD64
 	movf	thigh,W
 	addlw	252
 	btfsc	STATUS,C
-	goto	QMD85
+	goto	QMD65
 	movf	swrq,W
-	addlw	244
+	addlw	246
 	btfss	STATUS,Z	;_JG
 	btfss	STATUS,C
 	goto	_JG3
-	goto	QMD86
+	goto	QMD66
 _JG3
-QMD85
-	goto	QMD80
+QMD65
+	goto	QMD60
 ; } 
-QMD86
-; } } 
-QMD79
+QMD66
+; } QC = Cvals = Ct ; 
+QMD59
 	bcf	STATUS,C
 	rlf	Cvals,F
-	goto	QMD78
-QMD80
-; QC = Cvals = Cp ; 
-QMD77
-	movf	Cp,W
+	goto	QMD58
+QMD60
+	movf	Ct,W
 	movwf	Cvals
 	movwf	QC
-; QL = Lvals = L ; 
-	movf	L,W
+; QL = Lvals = Lt ; 
+	movf	Lt,W
 	movwf	Lvals
 	movwf	QL
-; QH = Hval = H ; 
-	movf	H,W
+; QH = Hval = Ht ; 
+	movf	Ht,W
 	movwf	Hval
 	movwf	QH
 ; write_vals ( ) ; 
@@ -2227,24 +2042,103 @@ QMD77
 	movwf	swr
 	return
 ; } 
-; Ftune ( ) { 
+; Qtest ( ) { 
+Qtest
+; write_vals ( ) ; 
+	call	write_vals
+; get_swr ( ) ; 
+	call	get_swr
+; if ( swr < swrq ) { 
+	movf	swr,W
+	movwf	_temp
+	movf	swrq,W
+	subwf	_temp,W
+	btfsc	STATUS,C
+	goto	QMD67
+; Lt = Lvals ; 
+	movf	Lvals,W
+	movwf	Lt
+; Ct = Cvals ; 
+	movf	Cvals,W
+	movwf	Ct
+; Ht = Hval ; 
+	movf	Hval,W
+	movwf	Ht
+; swrq = swr ; 
+	movf	swr,W
+	movwf	swrq
+; } 
+; } 
+QMD67
+	return
+; } Ftune ( ) { 
 Ftune
 ; static char dv ; 
 	;data
-QMD87	equ 263
-; static char ch ; 
-QMD88	equ 264
-; L = Lvals ; Cp = Cvals ; 
+QMD68	equ 263
+; Lt = Lvals ; Ct = Cvals ; 
 	;code
 	movf	Lvals,W
-	movwf	L
+	movwf	Lt
 	movf	Cvals,W
-	movwf	Cp
-; dv = 16 ; 
-	movlw	16
-	BANKSEL	QMD87
-	movwf	QMD87
+	movwf	Ct
+; Cdv = Ct >> 1 ; 
+	movf	Ct,W
+	movwf	_temp
+	movlw	1
+	iorlw	0
+	call	_rshift
+	movf	_temp,W
+	movwf	Cdv
+; Ldv = Lt >> 1 ; 
+	movf	Lt,W
+	movwf	_temp
+	movlw	1
+	iorlw	0
+	call	_rshift
+	movf	_temp,W
+	movwf	Ldv
+; dv = ( Ldv > Cdv ) ? Ldv : Cdv ; 
+	movf	Ldv,W
+	movwf	_temp
+	movf	Cdv,W
+	subwf	_temp,W
+	btfss	STATUS,Z	;_JLE
+	btfss	STATUS,C
+	goto	QMD69
+	movf	Ldv,W
+	goto	QMD70
+QMD69
+	movf	Cdv,W
+QMD70
+	BANKSEL	QMD68
+	movwf	QMD68
+; if ( Cdv == 0 ) Cdv = 1 ; 
+	movf	Cdv,W
+;addlw	256
+	btfss	STATUS,Z
+	goto	QMD71
+	movlw	1
+	movwf	Cdv
+; if ( Ldv == 0 ) Ldv = 1 ; 
+QMD71
+	movf	Ldv,W
+;addlw	256
+	btfss	STATUS,Z
+	goto	QMD72
+	movlw	1
+	movwf	Ldv
+; if ( dv == 0 ) dv = 1 ; 
+QMD72
+	BANKSEL	QMD68
+	movf	QMD68,W
+;addlw	256
+	btfss	STATUS,Z
+	goto	QMD73
+	movlw	1
+	movwf	QMD68
 ; write_vals ( ) ; 
+QMD73
 	call	write_vals
 ; get_swr ( ) ; 
 	call	get_swr
@@ -2252,200 +2146,160 @@ QMD88	equ 264
 	movf	swr,W
 	movwf	swrq
 ; while ( dv ) { 
-QMD89
-	BANKSEL	QMD87
-	movf	QMD87,W
+QMD74
+	BANKSEL	QMD68
+	movf	QMD68,W
 	btfsc	STATUS,Z
-	goto	QMD90
-; ch = 0 ; 
+	goto	QMD75
+; chg = 0 ; 
 ;movlw	0
-	clrf 	QMD88
-; Lvals += dv ; 
-	movf	QMD87,W
+	clrf 	chg
+; Lvals += Ldv ; 
+	movf	Ldv,W
 	addwf	Lvals,F
-; if ( Lvals < 128 ) { 
+; if ( Lvals < 128 ) FCLtest ( ) ; 
 	movf	Lvals,W
 	addlw	128
 	btfsc	STATUS,C
-	goto	QMD91
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD92
-; L = Lvals ; 
-	movf	Lvals,W
-	movwf	L
-; ++ ch ; 
-	BANKSEL	QMD88
-	incf	QMD88,F
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD92
-; } Lvals = L ; 
-QMD91
-	movf	L,W
+	goto	QMD76
+	call	FCLtest
+; Lvals = Lt ; 
+QMD76
+	movf	Lt,W
 	movwf	Lvals
-; Lvals -= dv ; 
-	BANKSEL	QMD87
-	movf	QMD87,W
-	subwf	Lvals,F
-; if ( Lvals < 128 ) { 
-	movf	Lvals,W
-	addlw	128
-	btfsc	STATUS,C
-	goto	QMD93
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD94
-; L = Lvals ; 
-	movf	Lvals,W
-	movwf	L
-; ++ ch ; 
-	BANKSEL	QMD88
-	incf	QMD88,F
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD94
-; } Lvals = L ; 
-QMD93
-	movf	L,W
-	movwf	Lvals
-; Cvals += dv ; 
-	BANKSEL	QMD87
-	movf	QMD87,W
-	addwf	Cvals,F
-; if ( Cvals < 128 ) { 
-	movf	Cvals,W
-	addlw	128
-	btfsc	STATUS,C
-	goto	QMD95
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD96
-; Cp = Cvals ; 
-	movf	Cvals,W
-	movwf	Cp
-; ++ ch ; 
-	BANKSEL	QMD88
-	incf	QMD88,F
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD96
-; } Cvals = Cp ; 
-QMD95
-	movf	Cp,W
-	movwf	Cvals
-; Cvals -= dv ; 
-	BANKSEL	QMD87
-	movf	QMD87,W
+; Cvals -= Cdv ; 
+	movf	Cdv,W
 	subwf	Cvals,F
-; if ( Cvals < 128 ) { 
+; if ( Cvals < 128 ) FCLtest ( ) ; 
 	movf	Cvals,W
 	addlw	128
 	btfsc	STATUS,C
-	goto	QMD97
-; write_vals ( ) ; 
-	call	write_vals
-; get_swr ( ) ; 
-	call	get_swr
-; if ( swr < swrq ) { 
-	movf	swr,W
-	movwf	_temp
-	movf	swrq,W
-	subwf	_temp,W
-	btfsc	STATUS,C
-	goto	QMD98
-; Cp = Cvals ; 
-	movf	Cvals,W
-	movwf	Cp
-; ++ ch ; 
-	BANKSEL	QMD88
-	incf	QMD88,F
-; swrq = swr ; 
-	movf	swr,W
-	movwf	swrq
-; } 
-; } 
-QMD98
-; } Cvals = Cp ; 
-QMD97
-	movf	Cp,W
+	goto	QMD77
+	call	FCLtest
+; Cvals = Ct ; 
+QMD77
+	movf	Ct,W
 	movwf	Cvals
-; if ( ch == 0 ) dv >>= 1 ; 
-	BANKSEL	QMD88
-	movf	QMD88,W
+; Lvals -= Ldv ; 
+	movf	Ldv,W
+	subwf	Lvals,F
+; if ( Lvals < 128 ) FCLtest ( ) ; 
+	movf	Lvals,W
+	addlw	128
+	btfsc	STATUS,C
+	goto	QMD78
+	call	FCLtest
+; Lvals = Lt ; 
+QMD78
+	movf	Lt,W
+	movwf	Lvals
+; Cvals += Cdv ; 
+	movf	Cdv,W
+	addwf	Cvals,F
+; if ( Cvals < 128 ) FCLtest ( ) ; 
+	movf	Cvals,W
+	addlw	128
+	btfsc	STATUS,C
+	goto	QMD79
+	call	FCLtest
+; Cvals = Ct ; 
+QMD79
+	movf	Ct,W
+	movwf	Cvals
+; if ( chg == 0 ) { 
+	movf	chg,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD99
+	goto	QMD80
+; dv >>= 1 ; 
+	BANKSEL	QMD68
 	bcf	STATUS,C
-	rrf	QMD87,F
-; if ( thigh >= 4 || swrq <= 12  ) break ; 
-QMD99
+	rrf	QMD68,F
+; if ( dv < Cdv ) Cdv = dv ; 
+	movf	QMD68,W
+	movwf	_temp
+	movf	Cdv,W
+	subwf	_temp,W
+	btfsc	STATUS,C
+	goto	QMD81
+	movf	QMD68,W
+	movwf	Cdv
+; if ( dv < Ldv ) Ldv = dv ; 
+QMD81
+	BANKSEL	QMD68
+	movf	QMD68,W
+	movwf	_temp
+	movf	Ldv,W
+	subwf	_temp,W
+	btfsc	STATUS,C
+	goto	QMD82
+	movf	QMD68,W
+	movwf	Ldv
+; } 
+QMD82
+; } if ( thigh >= 4 || swrq <= 10  ) break ; 
+QMD80
 	movf	thigh,W
 	addlw	252
 	btfsc	STATUS,C
-	goto	QMD100
+	goto	QMD83
 	movf	swrq,W
-	addlw	244
+	addlw	246
 	btfss	STATUS,Z	;_JG
 	btfss	STATUS,C
 	goto	_JG4
-	goto	QMD101
+	goto	QMD84
 _JG4
-QMD100
-	goto	QMD90
+QMD83
+	goto	QMD75
 ; } 
-QMD101
+QMD84
 ; } swr = swrq ; 
-	goto	QMD89
-QMD90
+	goto	QMD74
+QMD75
 	movf	swrq,W
 	movwf	swr
-; Cvals = Cp ; 
-	movf	Cp,W
+; Cvals = Ct ; 
+	movf	Ct,W
 	movwf	Cvals
-; Lvals = L ; 
-	movf	L,W
+; Lvals = Lt ; 
+	movf	Lt,W
 	movwf	Lvals
 ; write_vals ( ) ; 
 	call	write_vals
 	return
 ; } 
-; put_tx ( char val ) { 
+; FCLtest ( ) { 
+FCLtest
+; write_vals ( ) ; 
+	call	write_vals
+; get_swr ( ) ; 
+	call	get_swr
+; if ( swr < swrq ) { 
+	movf	swr,W
+	movwf	_temp
+	movf	swrq,W
+	subwf	_temp,W
+	btfsc	STATUS,C
+	goto	QMD85
+; Ct = Cvals ; 
+	movf	Cvals,W
+	movwf	Ct
+; Lt = Lvals ; 
+	movf	Lvals,W
+	movwf	Lt
+; ++ chg ; 
+	incf	chg,F
+; swrq = swr ; 
+	movf	swr,W
+	movwf	swrq
+; } 
+; } 
+QMD85
+	return
+; } put_tx ( char val ) { 
 	;data
-_put_tx	equ	265
+_put_tx	equ	264
 	;code
 put_tx
 	banksel	_put_tx
@@ -2466,7 +2320,7 @@ put_tx
 get_rx
 ; static char temp ; 
 	;data
-QMD102	equ 266
+QMD86	equ 265
 ; temp = rx_buf [ rx_out ++ ] ; 
 	;code
 	movf	rx_out,W
@@ -2474,13 +2328,13 @@ QMD102	equ 266
 	addlw	rx_buf
 	movwf	FSR
 	movf	INDF,W
-	BANKSEL	QMD102
-	movwf	QMD102
+	BANKSEL	QMD86
+	movwf	QMD86
 ; rx_out &= 7 ; 
 	movlw	7
 	andwf	rx_out,F
 ; return temp ; 
-	movf	QMD102,W
+	movf	QMD86,W
 	return
 ; } 
 ; init ( ) { 
@@ -2543,117 +2397,117 @@ init
 _interrupt
 ; static char rdat ; 
 	;data
-QMD103	equ 267
+QMD87	equ 266
 ; static char rmod ; 
-QMD104	equ 268
+QMD88	equ 267
 ; static char rbit ; 
-QMD105	equ 269
+QMD89	equ 268
 ; static char fsr0 ; 
-QMD106	equ 270
+QMD90	equ 269
 ; static char tdat ; 
-QMD107	equ 271
+QMD91	equ 270
 ; static char tmod ; 
-QMD108	equ 272
+QMD92	equ 271
 ; static char tbit ; 
-QMD109	equ 273
+QMD93	equ 272
 ; static char temp ; 
-QMD110	equ 274
+QMD94	equ 273
 ; fsr0 = FSR0L ; 
 	;code
 	movf	FSR0L,W
-	BANKSEL	QMD106
-	movwf	QMD106
+	BANKSEL	QMD90
+	movwf	QMD90
 ; if ( rtimer ) -- rtimer ; 
 	movf	rtimer,W
 	btfsc	STATUS,Z
-	goto	QMD111
+	goto	QMD95
 	decf	rtimer,F
 ; if ( ++ rmod > 2 ) rmod = 0 ; 
-QMD111
-	BANKSEL	QMD104
-	incf	QMD104,F
-	movf	QMD104,W
+QMD95
+	BANKSEL	QMD88
+	incf	QMD88,F
+	movf	QMD88,W
 	addlw	254
 	btfss	STATUS,Z	;_JLE
 	btfss	STATUS,C
-	goto	QMD112
+	goto	QMD96
 ;movlw	0
-	clrf 	QMD104
+	clrf 	QMD88
 ; switch ( rstate ) { 
-QMD112
+QMD96
 	movf	rstate,W
 ; case 0 : 
 ; : if ( ( PORTB & 0x40  ) == 0 ) { 
 	addlw	0
 	btfss	STATUS,Z
-	goto	QMD115
-QMD114
+	goto	QMD99
+QMD98
 	movf	PORTB,W
 	andlw	64
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD117
+	goto	QMD101
 ; rbit = rdat = rmod = 0 ; 
 	movlw	0
-	BANKSEL	QMD104
-	movwf	QMD104
-	movwf	QMD103
-	movwf	QMD105
+	BANKSEL	QMD88
+	movwf	QMD88
+	movwf	QMD87
+	movwf	QMD89
 ; ++ rstate ; 
 	incf	rstate,F
 ; } 
 ; break ; 
-QMD117
-	goto	QMD113
+QMD101
+	goto	QMD97
 ; case 1 : 
-QMD115
+QMD99
 ; : if ( rmod == 1 ) { 
 	addlw	255
 	btfss	STATUS,Z
-	goto	QMD119
-QMD118
-	BANKSEL	QMD104
-	movf	QMD104,W
+	goto	QMD103
+QMD102
+	BANKSEL	QMD88
+	movf	QMD88,W
 	addlw	255
 	btfss	STATUS,Z
-	goto	QMD121
+	goto	QMD105
 ; rdat >>= 1 ; 
 	bcf	STATUS,C
-	rrf	QMD103,F
+	rrf	QMD87,F
 ; if ( PORTB & 0x40  ) rdat |= 0x80 ; 
 	movf	PORTB,W
 	andlw	64
 	btfsc	STATUS,Z
-	goto	QMD122
+	goto	QMD106
 	movlw	128
-	iorwf	QMD103,F
+	iorwf	QMD87,F
 ; if ( ++ rbit == 9 ) ++ rstate ; 
-QMD122
-	BANKSEL	QMD105
-	incf	QMD105,F
-	movf	QMD105,W
+QMD106
+	BANKSEL	QMD89
+	incf	QMD89,F
+	movf	QMD89,W
 	addlw	247
 	btfss	STATUS,Z
-	goto	QMD123
+	goto	QMD107
 	incf	rstate,F
 ; } 
-QMD123
+QMD107
 ; } break ; 
-QMD121
-	goto	QMD113
+QMD105
+	goto	QMD97
 ; case 2 : 
-QMD119
+QMD103
 ; : rx_buf [ rx_in ++ ] = rdat ; 
 	addlw	255
 	btfss	STATUS,Z
-	goto	QMD125
-QMD124
+	goto	QMD109
+QMD108
 	movf	rx_in,W
 	incf	rx_in,F
 	addlw	rx_buf
 	movwf	FSR
-	BANKSEL	QMD103
-	movf	QMD103,W
+	BANKSEL	QMD87
+	movf	QMD87,W
 	movwf	INDF
 ; rx_in &= 7 ; 
 	movlw	7
@@ -2662,50 +2516,50 @@ QMD124
 ;movlw	0
 	clrf 	rstate
 ; break ; 
-	goto	QMD113
+	goto	QMD97
 ; } 
-QMD125
-QMD113
+QMD109
+QMD97
 ; if ( ++ tmod > 2 ) tmod = 0 ; 
-	BANKSEL	QMD108
-	incf	QMD108,F
-	movf	QMD108,W
+	BANKSEL	QMD92
+	incf	QMD92,F
+	movf	QMD92,W
 	addlw	254
 	btfss	STATUS,Z	;_JLE
 	btfss	STATUS,C
-	goto	QMD127
+	goto	QMD111
 ;movlw	0
-	clrf 	QMD108
+	clrf 	QMD92
 ; switch ( tstate ) { 
-QMD127
+QMD111
 	movf	tstate,W
 ; case 0 : 
 ; : if ( tx_in != tx_out ) { 
 	addlw	0
 	btfss	STATUS,Z
-	goto	QMD130
-QMD129
+	goto	QMD114
+QMD113
 	movf	tx_in,W
 	movwf	_temp2
 	movf	tx_out,W
 	subwf	_temp2,W
 	btfsc	STATUS,Z
-	goto	QMD132
+	goto	QMD116
 ; tdat = tx_buf [ tx_out ++ ] ; 
 	movf	tx_out,W
 	incf	tx_out,F
 	addlw	tx_buf
 	movwf	FSR
 	movf	INDF,W
-	BANKSEL	QMD107
-	movwf	QMD107
+	BANKSEL	QMD91
+	movwf	QMD91
 ; tx_out &= 7 ; 
 	movlw	7
 	andwf	tx_out,F
 ; tmod = tbit = 0 ; 
 	movlw	0
-	movwf	QMD109
-	movwf	QMD108
+	movwf	QMD93
+	movwf	QMD92
 ; LATB ^= 0x80  ; 
 	movlw	128
 	xorwf	LATB,F
@@ -2713,70 +2567,70 @@ QMD129
 	incf	tstate,F
 ; } 
 ; break ; 
-QMD132
-	goto	QMD128
+QMD116
+	goto	QMD112
 ; case 1 : 
-QMD130
+QMD114
 ; : if ( tmod == 0 ) { 
 	addlw	255
 	btfss	STATUS,Z
-	goto	QMD134
-QMD133
-	BANKSEL	QMD108
-	movf	QMD108,W
+	goto	QMD118
+QMD117
+	BANKSEL	QMD92
+	movf	QMD92,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD136
+	goto	QMD120
 ; temp = ( tdat & 1 ) ? 0x80  : 0 ; 
-	movf	QMD107,W
+	movf	QMD91,W
 	andlw	1
 	btfsc	STATUS,Z
-	goto	QMD137
+	goto	QMD121
 	movlw	128
 	iorlw	0
-	goto	QMD138
-QMD137
+	goto	QMD122
+QMD121
 	movlw	0
 	iorlw	0
-QMD138
-	BANKSEL	QMD110
-	movwf	QMD110
+QMD122
+	BANKSEL	QMD94
+	movwf	QMD94
 ; temp ^= LATB ; 
 	movf	LATB,W
-	xorwf	QMD110,F
+	xorwf	QMD94,F
 ; temp &= 0x80  ; 
 	movlw	128
-	andwf	QMD110,F
+	andwf	QMD94,F
 ; LATB ^= temp ; 
-	movf	QMD110,W
+	movf	QMD94,W
 	xorwf	LATB,F
 ; tdat >>= 1 ; 
 	bcf	STATUS,C
-	rrf	QMD107,F
+	rrf	QMD91,F
 ; if ( ++ tbit == 8 ) ++ tstate ; 
-	incf	QMD109,F
-	movf	QMD109,W
+	incf	QMD93,F
+	movf	QMD93,W
 	addlw	248
 	btfss	STATUS,Z
-	goto	QMD139
+	goto	QMD123
 	incf	tstate,F
 ; } 
-QMD139
+QMD123
 ; } break ; 
-QMD136
-	goto	QMD128
+QMD120
+	goto	QMD112
 ; case 2 : 
-QMD134
+QMD118
 ; : if ( tmod == 0 ) { 
 	addlw	255
 	btfss	STATUS,Z
-	goto	QMD141
-QMD140
-	BANKSEL	QMD108
-	movf	QMD108,W
+	goto	QMD125
+QMD124
+	BANKSEL	QMD92
+	movf	QMD92,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD143
+	goto	QMD127
 ; LATB |= 0x80  ; 
 	movlw	128
 	iorwf	LATB,F
@@ -2784,36 +2638,36 @@ QMD140
 	incf	tstate,F
 ; } 
 ; break ; 
-QMD143
-	goto	QMD128
+QMD127
+	goto	QMD112
 ; case 3 : 
-QMD141
+QMD125
 ; : if ( tmod == 0 ) tstate = 0 ; 
 	addlw	255
 	btfss	STATUS,Z
-	goto	QMD145
-QMD144
-	BANKSEL	QMD108
-	movf	QMD108,W
+	goto	QMD129
+QMD128
+	BANKSEL	QMD92
+	movf	QMD92,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD147
+	goto	QMD131
 ;movlw	0
 	clrf 	tstate
 ; break ; 
-QMD147
-	goto	QMD128
+QMD131
+	goto	QMD112
 ; } 
-QMD145
-QMD128
+QMD129
+QMD112
 ; FSR0L = fsr0 ; 
-	BANKSEL	QMD106
-	movf	QMD106,W
+	BANKSEL	QMD90
+	movf	QMD90,W
 	movwf	FSR0L
 ; # asm 
     BCF  PIR1,TMR2IF
     retfie FAST           ; WREG, STATUS, BSR restored
-QMD148
+QMD132
 	retfie
 ; } write_vals ( ) { 
 write_vals
@@ -2894,7 +2748,7 @@ write_vals
       bsf   LATA,4
       btfss Lvals,6
       bcf   LATA,4
-QMD149
+QMD133
 ; delay ( 10 ) ; 
 	movlw	10
 	call	delay
@@ -2902,7 +2756,7 @@ QMD149
 ; } 
 ; delay ( char tm ) { 
 	;data
-_delay	equ	275
+_delay	equ	274
 	;code
 delay
 	banksel	_delay
@@ -2916,12 +2770,12 @@ delay
 	movf	_delay,W
 	movwf	rtimer
 ; while ( rtimer ) ; 
-QMD150
+QMD134
 	movf	rtimer,W
 	btfsc	STATUS,Z
-	goto	QMD151
-	goto	QMD150
-QMD151
+	goto	QMD135
+	goto	QMD134
+QMD135
 	return
 ; } 
 ; interrupts ( ) { 
@@ -2929,7 +2783,7 @@ interrupts
 ; # asm 
       bsf   INTCON,GIE
       bsf   INTCON,PEIE   ;  need for tmr2 ? : yes  
-QMD152
+QMD136
 	return
 ; } no_interrupts ( ) { 
 no_interrupts
@@ -2937,18 +2791,18 @@ no_interrupts
       bcf   INTCON,GIE
       btfsc INTCON,GIE    ;see AN576.  What devices have this issue?
       goto $-2
-QMD153
+QMD137
 	return
 ; } ad_sample ( char just ) { 
 	;data
-_ad_sample	equ	276
+_ad_sample	equ	275
 	;code
 ad_sample
 	banksel	_ad_sample
 	movwf	_ad_sample
 ; static char i ; 
 	;data
-QMD154	equ 277
+QMD138	equ 276
 ; ADCON2 = just + 0x25 ; 
 	;code
 	BANKSEL	_ad_sample
@@ -2960,69 +2814,153 @@ QMD154	equ 277
 	movwf	ADCON0
 ; for ( i = 0 ; i < 5 ; ++ i ) ; 
 	movlw	0
-	movwf	QMD154
-QMD155
-	BANKSEL	QMD154
-	movf	QMD154,W
+	movwf	QMD138
+QMD139
+	BANKSEL	QMD138
+	movf	QMD138,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD157
-QMD156
+	goto	QMD141
+QMD140
 ; ++ i )  # asm 
-	BANKSEL	QMD154
-	incf	QMD154,F
-	goto	QMD155
-QMD157
+	BANKSEL	QMD138
+	incf	QMD138,F
+	goto	QMD139
+QMD141
     bsf ADCON0,1
-QMD158
+QMD142
 ; while ( ADCON0 & 0x02  ) ; 
-QMD159
+QMD143
 	movf	ADCON0,W
 	andlw	2
 	btfsc	STATUS,Z
-	goto	QMD160
-	goto	QMD159
-QMD160
-; fwdh = ADRESH ; 
+	goto	QMD144
+	goto	QMD143
+QMD144
+; acch = ADRESH ; 
 	movf	ADRESH,W
-	movwf	fwdh
-; fwdl = ADRESL ; 
+	movwf	acch
+; accl = ADRESL ; 
 	movf	ADRESL,W
+	movwf	accl
+; for ( i = 0 ; i < 5 ; ++ i ) ; 
+	movlw	0
+	BANKSEL	QMD138
+	movwf	QMD138
+QMD145
+	BANKSEL	QMD138
+	movf	QMD138,W
+	addlw	251
+	btfsc	STATUS,C
+	goto	QMD147
+QMD146
+; ++ i )  # asm 
+	BANKSEL	QMD138
+	incf	QMD138,F
+	goto	QMD145
+QMD147
+    bsf ADCON0,1
+QMD148
+; while ( ADCON0 & 0x02  ) ; 
+QMD149
+	movf	ADCON0,W
+	andlw	2
+	btfsc	STATUS,Z
+	goto	QMD150
+	goto	QMD149
+QMD150
+; argh = ADRESH ; 
+	movf	ADRESH,W
+	movwf	argh
+; argl = ADRESL ; 
+	movf	ADRESL,W
+	movwf	argl
+; dadd ( ) ; 
+	call	dadd
+; right_shift ( 1 ) ; 
+	movlw	1
+	call	right_shift
+; fwdh = acch ; fwdl = accl ; 
+	movf	acch,W
+	movwf	fwdh
+	movf	accl,W
 	movwf	fwdl
 ; ADCON0 = 1 ; 
 	movlw	1
 	movwf	ADCON0
 ; for ( i = 0 ; i < 5 ; ++ i ) ; 
 	movlw	0
-	BANKSEL	QMD154
-	movwf	QMD154
-QMD161
-	BANKSEL	QMD154
-	movf	QMD154,W
+	BANKSEL	QMD138
+	movwf	QMD138
+QMD151
+	BANKSEL	QMD138
+	movf	QMD138,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD163
-QMD162
+	goto	QMD153
+QMD152
 ; ++ i )  # asm 
-	BANKSEL	QMD154
-	incf	QMD154,F
-	goto	QMD161
-QMD163
+	BANKSEL	QMD138
+	incf	QMD138,F
+	goto	QMD151
+QMD153
     bsf ADCON0,1
-QMD164
+QMD154
 ; while ( ADCON0 & 0x02  ) ; 
-QMD165
+QMD155
 	movf	ADCON0,W
 	andlw	2
 	btfsc	STATUS,Z
-	goto	QMD166
-	goto	QMD165
-QMD166
-; revh = ADRESH ; 
+	goto	QMD156
+	goto	QMD155
+QMD156
+; acch = ADRESH ; 
 	movf	ADRESH,W
-	movwf	revh
-; revl = ADRESL ; 
+	movwf	acch
+; accl = ADRESL ; 
 	movf	ADRESL,W
+	movwf	accl
+; for ( i = 0 ; i < 5 ; ++ i ) ; 
+	movlw	0
+	BANKSEL	QMD138
+	movwf	QMD138
+QMD157
+	BANKSEL	QMD138
+	movf	QMD138,W
+	addlw	251
+	btfsc	STATUS,C
+	goto	QMD159
+QMD158
+; ++ i )  # asm 
+	BANKSEL	QMD138
+	incf	QMD138,F
+	goto	QMD157
+QMD159
+    bsf ADCON0,1
+QMD160
+; while ( ADCON0 & 0x02  ) ; 
+QMD161
+	movf	ADCON0,W
+	andlw	2
+	btfsc	STATUS,Z
+	goto	QMD162
+	goto	QMD161
+QMD162
+; argh = ADRESH ; 
+	movf	ADRESH,W
+	movwf	argh
+; argl = ADRESL ; 
+	movf	ADRESL,W
+	movwf	argl
+; dadd ( ) ; 
+	call	dadd
+; right_shift ( 1 ) ; 
+	movlw	1
+	call	right_shift
+; revh = acch ; revl = accl ; 
+	movf	acch,W
+	movwf	revh
+	movf	accl,W
 	movwf	revl
 	return
 ; } 
@@ -3030,59 +2968,59 @@ QMD166
 get_swr
 ; static char fwd ; 
 	;data
-QMD167	equ 278
+QMD163	equ 277
 ; fwd = 0 ; 
 	;code
 	movlw	0
-	BANKSEL	QMD167
-	movwf	QMD167
-; while ( fwd < 4 ) { 
-QMD168
-	BANKSEL	QMD167
-	movf	QMD167,W
-	addlw	252
+	BANKSEL	QMD163
+	movwf	QMD163
+; while ( fwd < 5 ) { 
+QMD164
+	BANKSEL	QMD163
+	movf	QMD163,W
+	addlw	251
 	btfsc	STATUS,C
-	goto	QMD169
+	goto	QMD165
 ; if ( ++ tlow == 0 ) ++ thigh ; 
 	incf	tlow,F
 	movf	tlow,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD170
+	goto	QMD166
 	incf	thigh,F
 ; ad_sample ( 0x80  ) ; 
-QMD170
+QMD166
 	movlw	128
 	call	ad_sample
 ; if ( fwdh == 0 ) fwd = fwdl ; 
 	movf	fwdh,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD171
+	goto	QMD167
 	movf	fwdl,W
-	BANKSEL	QMD167
-	movwf	QMD167
+	BANKSEL	QMD163
+	movwf	QMD163
 ; else fwd = 99 ; 
-	goto	QMD172
-QMD171
+	goto	QMD168
+QMD167
 	movlw	99
-	BANKSEL	QMD167
-	movwf	QMD167
-QMD172
-; if ( fwd < 4 ) delay ( 10 ) ; 
-	BANKSEL	QMD167
-	movf	QMD167,W
-	addlw	252
+	BANKSEL	QMD163
+	movwf	QMD163
+QMD168
+; if ( fwd < 5 ) delay ( 10 ) ; 
+	BANKSEL	QMD163
+	movf	QMD163,W
+	addlw	251
 	btfsc	STATUS,C
-	goto	QMD173
+	goto	QMD169
 	movlw	10
 	call	delay
 ; if ( thigh >= 4 ) { 
-QMD173
+QMD169
 	movf	thigh,W
 	addlw	252
 	btfss	STATUS,C
-	goto	QMD174
+	goto	QMD170
 ; swr = 253 ; 
 	movlw	253
 	movwf	swr
@@ -3090,10 +3028,10 @@ QMD173
 	return
 ; } 
 ; } 
-QMD174
+QMD170
 ; } acch = fwdh ; accl = fwdl ; 
-	goto	QMD168
-QMD169
+	goto	QMD164
+QMD165
 	movf	fwdh,W
 	movwf	acch
 	movf	fwdl,W
@@ -3127,7 +3065,7 @@ QMD169
 	call	dsub
 	iorlw	0
 	btfsc	STATUS,Z
-	goto	QMD175
+	goto	QMD171
 ; swr = 250 ; 
 	movlw	250
 	movwf	swr
@@ -3135,7 +3073,7 @@ QMD169
 	return
 ; } 
 ; argh = acch ; argl = accl ; 
-QMD175
+QMD171
 	movf	acch,W
 	movwf	argh
 	movf	accl,W
@@ -3144,11 +3082,11 @@ QMD175
 	movf	argh,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD176
+	goto	QMD172
 	movf	argl,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD176
+	goto	QMD172
 ; swr = 251 ; 
 	movlw	251
 	movwf	swr
@@ -3156,12 +3094,12 @@ QMD175
 	return
 ; } 
 ; divide ( ) ; 
-QMD176
+QMD172
 	call	divide
 ; if ( divqh ) { 
 	movf	divqh,W
 	btfsc	STATUS,Z
-	goto	QMD177
+	goto	QMD173
 ; swr = 252 ; 
 	movlw	252
 	movwf	swr
@@ -3169,7 +3107,7 @@ QMD176
 	return
 ; } 
 ; swr = divql ; 
-QMD177
+QMD173
 	movf	divql,W
 	movwf	swr
 	return
@@ -3206,35 +3144,35 @@ dadd
       btfsc   STATUS,C
       incf    overflow,F        ; merge in if had an overflow here
 
-QMD178
+QMD174
 ; return overflow ; 
 	movf	overflow,W
 	return
 ; } 
 ; right_shift ( char count ) { 
 	;data
-_right_shift	equ	279
+_right_shift	equ	278
 	;code
 right_shift
 	banksel	_right_shift
 	movwf	_right_shift
 ; while ( count -- ) { 
-QMD179
+QMD175
 	BANKSEL	_right_shift
 	movf	_right_shift,W
 	decf	_right_shift,F
 	iorlw	0
 	btfsc	STATUS,Z
-	goto	QMD180
+	goto	QMD176
 ; # asm 
         banksel  acch
         bcf   STATUS,C      ; logical shift right double
         rrf   acch,F
         rrf   accl,F
-QMD181
+QMD177
 ; } } 
-	goto	QMD179
-QMD180
+	goto	QMD175
+QMD176
 	return
 ; char dsub ( ) { 
 dsub
@@ -3261,7 +3199,7 @@ dsub
       btfss   STATUS,C
       incf    overflow,F        ; merge in if had a borrow here
 
-QMD182
+QMD178
 ; return overflow ; 
 	movf	overflow,W
 	return
@@ -3273,40 +3211,40 @@ divide
 ; for ( divi = 0 ; divi < 16 ; ++ divi ) { 
 	movlw	0
 	movwf	divi
-QMD183
+QMD179
 	movf	divi,W
 	addlw	240
 	btfsc	STATUS,C
-	goto	QMD185
+	goto	QMD181
 ; # asm 
         bcf   STATUS,C
         rlf   divql,F        ; banksel ok here, same as divi
         rlf   divqh,F
         rlf   accl,F
         rlf   acch,F
-QMD186
+QMD182
 ; if ( dsub ( ) ) dadd ( ) ; 
 	call	dsub
 	iorlw	0
 	btfsc	STATUS,Z
-	goto	QMD187
+	goto	QMD183
 	call	dadd
 ; else divql |= 1 ; 
-	goto	QMD188
-QMD187
+	goto	QMD184
+QMD183
 	movlw	1
 	iorwf	divql,F
-QMD188
-; } 
 QMD184
+; } 
+QMD180
 ; ++ divi )  } 
 	incf	divi,F
-	goto	QMD183
-QMD185
+	goto	QMD179
+QMD181
 	return
 ; divide_k ( char constant ) { 
 	;data
-_divide_k	equ	280
+_divide_k	equ	279
 	;code
 divide_k
 	banksel	_divide_k
@@ -3332,19 +3270,19 @@ divide_k
 ; } 
 ; char multiply ( char multi ) { 
 	;data
-_multiply	equ	281
+_multiply	equ	280
 	;code
 multiply
 	banksel	_multiply
 	movwf	_multiply
 ; static char over ; 
 	;data
-QMD189	equ 282
+QMD185	equ 281
 ; over = 0 ; 
 	;code
 	movlw	0
-	BANKSEL	QMD189
-	movwf	QMD189
+	BANKSEL	QMD185
+	movwf	QMD185
 ; divi = multi ; 
 	movf	_multiply,W
 	movwf	divi
@@ -3357,20 +3295,20 @@ QMD189	equ 282
 ; zacc ( ) ; 
 	call	zacc
 ; while ( divi ) { 
-QMD190
+QMD186
 	movf	divi,W
 	btfsc	STATUS,Z
-	goto	QMD191
+	goto	QMD187
 ; if ( divi & 1 ) over |= dadd ( ) ; 
 	movf	divi,W
 	andlw	1
 	btfsc	STATUS,Z
-	goto	QMD192
+	goto	QMD188
 	call	dadd
-	BANKSEL	QMD189
-	iorwf	QMD189,F
+	BANKSEL	QMD185
+	iorwf	QMD185,F
 ; divi >>= 1 ; 
-QMD192
+QMD188
 	bcf	STATUS,C
 	rrf	divi,F
 ; # asm 
@@ -3378,12 +3316,12 @@ QMD192
           bcf  STATUS,C
           rlf  argl,F
           rlf  argh,F
-QMD193
+QMD189
 ; } return over ; 
-	goto	QMD190
-QMD191
-	BANKSEL	QMD189
-	movf	QMD189,W
+	goto	QMD186
+QMD187
+	BANKSEL	QMD185
+	movf	QMD185,W
 	return
 ; } 
 	end

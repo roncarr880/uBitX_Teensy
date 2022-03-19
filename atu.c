@@ -1,7 +1,7 @@
 
 /* usdx SOTA ATU in the bitX.  PIC18F2220 instead of 16f1938 due to part shortages */
 /*
-    Proposed commands on serial, should all commands have a response ?
+    Proposed commands on serial
   Z  -  Zero relays, keep current data.  Bypass mode.
   X  -  Set Quick solution relays.  Max 3 on.
   O  -  On, apply relays
@@ -34,7 +34,8 @@
 #define ADRIGHT 0x80           /* left or right justification of A/D result */
 #define ADLEFT  0x00
 
-#define MATCH 12               /* antenna matched swr * 10 */
+#define MATCH 10               /* antenna matched swr * 10 */
+#define QMATCH 14
 
 /*   #pragma pic 504
      char stack[8];   not using this */
@@ -87,9 +88,11 @@ char divi;
 char divql;
 char divqh;
 
-/*  make these common variable names global in access page, should result in less banking changes */
-char Cp,L,H;      /* C is reserved by assembler */
+/*  make these common variable names global in access page, should result in less ram bank changes */
+char Ct,Lt,Ht;
 char swrq;
+char Cdv, Ldv;
+char chg;
 
 
 
@@ -215,183 +218,131 @@ tune(){
 
    tlow = thigh = 0;         /* timeout try counter */
    Qtune();
-   if( thigh >= 4 ){
+   if( thigh >= 4 ){         /* timeout, no signal probably */
       put_tx('T');
       put_tx( swr );
       return;
    }
-   if( swr > MATCH ) Ftune();     /* swr scaled by 10 */
+   if( swr > MATCH ) Ftune();     /* fine tune from the best quick tune result */
    put_tx('T');
    put_tx(swr);
 
 }
 
-Qtune(){                 /* shift a bit across L and C, should take 1 second ( 7*7*2*10ms ) */
-/*static char swrq;*/
-/*static char L,C,H;  */     /* wear leveling of relays version, L in outer loop, then C in outer loop */
-                         /* test all combinations of one L and one C relay with caps on antenna side and PA side */
+Qtune(){                 /* shift a bit across L and  C */
+/* char swrq;*/
+/* char Lt,Ct,Ht;  */
+
 
    /* swrq = 249; */
-   QC = Cvals = Cp = 0;
-   QL = Lvals = L = 0;
-   QH = Hval  = H = 0;
-   write_vals();         /* get a base reading of passthrough */
+   QC = Cvals = Ct = 0;
+   QL = Lvals = Lt = 0;
+   QH = Hval  = Ht = 0;
+   write_vals();              /* get a base reading of passthrough */
    get_swr();
    swrq = swr;
-   if( thigh >= 4 || swr <= MATCH ) return;     /* antenna matched without tuner */
+   if( thigh >= 4 || swr <= MATCH ) return;     /* timeout or antenna matched without tuner */
 
-   /* just L relays , zero C */
-   for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
-      write_vals();
-      get_swr();
-      if( swr < swrq ){       /* save best results so far */
-         L = Lvals;
-         Cp = Cvals;
-         H = Hval;
-         swrq = swr;
-      }
-   }
 
-   /* just C relays , zero L */
-   if( thigh < 4 && swrq > MATCH ){
-      Lvals = 0;
-      for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
-         write_vals();
-         get_swr();
-         if( swr < swrq ){       /* save best results so far */
-            L = Lvals;
-            Cp = Cvals;
-            H = Hval;
-            swrq = swr;
-         }
-      }
-   }
-
-   if( thigh < 4 && swrq > MATCH ){
-      Hval = 0;                     /* caps on PA side, low Z */
+   for( Cvals = 1; Cvals < 128;  Cvals <<= 1 ){
       for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
-         for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
-            write_vals();
-            get_swr();
-            if( swr < swrq ){       /* save best results so far */
-               L = Lvals;
-               Cp = Cvals;
-               H = Hval;
-               swrq = swr;
-            }
-         }
-         if( thigh >= 4 || swrq <= MATCH ) break;
+         Hval = 0;               /* test low Z */
+         Qtest();
+         Hval = 128;             /* test high Z */
+         Qtest();
       }
-   }
-
-   if( thigh < 4 && swrq > MATCH ){
-      Hval = 128;                   /* caps on Antenna side, high Z */
-      for( Cvals = 1; Cvals < 128; Cvals <<= 1 ){
-         for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
-            write_vals();
-            get_swr();
-            if( swr < swrq ){
-               L = Lvals;
-               Cp = Cvals;
-               H = Hval;
-               swrq = swr;
-            }
-         }
-         if( thigh >= 4 || swrq <= MATCH ) break;
-      }
-   }
+      if( swrq <= QMATCH && Ct > 1 ) break;      /* avoid early exit for low Ct, Ht may be incorrect, HiZ LoZ */
+      if( thigh >= 4 || swrq <= MATCH ) break;   /* timeout or matched */
+   }      
 
    /* apply best, save quick solution */
-   QC = Cvals = Cp;
-   QL = Lvals = L;
-   QH = Hval = H;
+   QC = Cvals = Ct;
+   QL = Lvals = Lt;
+   QH = Hval = Ht;
    write_vals();
    swr = swrq;  
 }
 
-  /* a binary tuning algorithm, try above and below current quick tune values with decreasing offset */
+
+Qtest(){
+
+   write_vals();
+   get_swr();
+   if( swr < swrq ){       /* save best results so far */
+      Lt = Lvals;
+      Ct = Cvals;
+      Ht = Hval;
+      swrq = swr;
+   }
+}
+
+  /* a binary tuning algorithm, try above and below quick tune result with decreasing offset */
+  /* high Z, low Z not changed */
 Ftune(){
-/*static char swrq;*/
-/*static char L,C;*/
 static char dv;                 /* delta value */
-static char ch;                 /* values changed */
 
-   L = Lvals;  Cp = Cvals;
-   /* swrq = swr; */
-   dv = 16;
-   /* ch = 0; */
+   Lt = Lvals;  Ct = Cvals;
+   Cdv = Ct >> 1;               /* start search next power of two down */
+   Ldv = Lt >> 1;
+   dv = ( Ldv > Cdv ) ? Ldv : Cdv;
+   if( Cdv == 0 ) Cdv = 1;      /* set min adjustment values or nothing to do here */
+   if( Ldv == 0 ) Ldv = 1;
+   if( dv == 0 ) dv = 1;
 
-   write_vals();                /* starting swr is known but get it again */
+   write_vals();                /* starting swr is known but get it again in case preceeding algorithm is changed */
    get_swr();
    swrq = swr;  
 
    while( dv ){
-      ch = 0;
+      chg = 0;
 
       /* try up L */
-      Lvals += dv;
-      if( Lvals < 128 ){
-         write_vals();
-         get_swr();
-         if( swr < swrq ){
-            L = Lvals;
-            ++ch;
-            swrq = swr;
-         }
-      }
-      Lvals = L;
-
-      /* try down L */
-      Lvals -= dv;
-      if( Lvals < 128 ){            /* unsigned math */
-         write_vals();
-         get_swr();
-         if( swr < swrq ){
-            L = Lvals;
-            ++ch;
-            swrq = swr;
-         }
-      }
-      Lvals = L;
-
-      /* try up C */
-      Cvals += dv;
-      if( Cvals < 128 ){
-         write_vals();
-         get_swr();
-         if( swr < swrq ){
-            Cp = Cvals;
-            ++ch;
-            swrq = swr;
-         }
-      }
-      Cvals = Cp;
+      Lvals += Ldv;
+      if( Lvals < 128 ) FCLtest();
+      Lvals = Lt;
 
       /* try down C */
-      Cvals -= dv;
-      if( Cvals < 128 ){            /* unsigned math */
-         write_vals();
-         get_swr();
-         if( swr < swrq ){
-            Cp = Cvals;
-            ++ch;
-            swrq = swr;
-         }
-      }
-      Cvals = Cp;
+      Cvals -= Cdv;
+      if( Cvals < 128 ) FCLtest();           /* unsigned math */
+      Cvals = Ct;
 
-      if( ch == 0 ) dv >>= 1;
+      /* try down L */
+      Lvals -= Ldv;
+      if( Lvals < 128 ) FCLtest();           /* unsigned math */
+      Lvals = Lt;
+
+      /* try up C */
+      Cvals += Cdv;
+      if( Cvals < 128 ) FCLtest();
+      Cvals = Ct;
+
+      if( chg == 0 ){
+         dv >>= 1;
+         if( dv < Cdv ) Cdv = dv;
+         if( dv < Ldv ) Ldv = dv;
+      }
       if( thigh >= 4 || swrq <= MATCH ) break;
    }
 
    swr = swrq;                /* write best */
-   Cvals = Cp;
-   Lvals = L;
+   Cvals = Ct;
+   Lvals = Lt;
    write_vals(); 
 
 }
 
 
+FCLtest(){
+
+   write_vals();
+   get_swr();
+   if( swr < swrq ){
+      Ct = Cvals;
+      Lt = Lvals;
+      ++chg;
+      swrq = swr;
+   }
+}
 
 put_tx( char val ){
 
@@ -657,8 +608,21 @@ static char i;
     bsf ADCON0,1
   #endasm
   while( ADCON0 & B1 );    /* wait done */
-  fwdh = ADRESH;
-  fwdl = ADRESL;
+  acch = ADRESH;
+  accl = ADRESL;
+
+  for( i = 0; i < 5; ++i );   /* average 2 samples */
+  #asm
+    bsf ADCON0,1
+  #endasm
+  while( ADCON0 & B1 );    /* wait done */
+  argh = ADRESH;
+  argl = ADRESL;
+
+  dadd();
+  right_shift(1);
+  fwdh = acch;   fwdl = accl;
+
 
   ADCON0 = 1;                 /* chan 0 */
   for( i = 0; i < 5; ++i );   /* delay */
@@ -666,8 +630,20 @@ static char i;
     bsf ADCON0,1
   #endasm
   while( ADCON0 & B1 );    /* wait done */
-  revh = ADRESH;
-  revl = ADRESL;
+  acch = ADRESH;
+  accl = ADRESL;
+
+  for( i = 0; i < 5; ++i );   /* delay */
+  #asm
+    bsf ADCON0,1
+  #endasm
+  while( ADCON0 & B1 );    /* wait done */
+  argh = ADRESH;
+  argl = ADRESL;
+
+  dadd();
+  right_shift(1);
+  revh = acch;   revl = accl;
   
 }
 
@@ -675,12 +651,12 @@ get_swr(){
 static char fwd;
 
    fwd = 0;
-   while( fwd < 4 ){                 /* noise always less than 4 ? */
+   while( fwd < 5 ){                 /* noise always less than Number ? */
      if( ++tlow == 0 ) ++thigh;
      ad_sample( ADRIGHT );
      if( fwdh == 0 ) fwd = fwdl;     /* see if have a reading */
-     else fwd = 99;                  /* just any value > 4 to exit this loop */
-     if( fwd < 4 ) delay( 10 );
+     else fwd = 99;                  /* just any value > Number to exit this loop */
+     if( fwd < 5 ) delay( 10 );
      if( thigh >= 4 ){
         swr = 253;
         return;
