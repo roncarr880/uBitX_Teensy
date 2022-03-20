@@ -35,7 +35,7 @@
 #define ADLEFT  0x00
 
 #define MATCH 10               /* antenna matched swr * 10 */
-#define QMATCH 14
+#define QMATCH 13
 
 /*   #pragma pic 504
      char stack[8];   not using this */
@@ -233,8 +233,6 @@ Qtune(){                 /* shift a bit across L and  C */
 /* char swrq;*/
 /* char Lt,Ct,Ht;  */
 
-
-   /* swrq = 249; */
    QC = Cvals = Ct = 0;
    QL = Lvals = Lt = 0;
    QH = Hval  = Ht = 0;
@@ -243,7 +241,7 @@ Qtune(){                 /* shift a bit across L and  C */
    swrq = swr;
    if( thigh >= 4 || swr <= MATCH ) return;     /* timeout or antenna matched without tuner */
 
-
+   /* find the best two relay solution or three relay if High Z, takes 1 second */
    for( Cvals = 1; Cvals < 128;  Cvals <<= 1 ){
       for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
          Hval = 0;               /* test low Z */

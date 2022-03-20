@@ -1506,7 +1506,7 @@ TOSU	equ 4095
 ; # define ADRIGHT 0x80 
 ; # define ADLEFT 0x00 
 ; # define MATCH 10 
-; # define QMATCH 14 
+; # define QMATCH 13 
 ; # pragma pic 0 
 ; char _temp ; 
 _temp	equ 0
@@ -1983,13 +1983,13 @@ QMD61
 	call	Qtest
 ; } 
 QMD62
-; Lvals <<= 1 )  if ( swrq <= 14  && Ct > 1 ) break ; 
+; Lvals <<= 1 )  if ( swrq <= 13  && Ct > 1 ) break ; 
 	bcf	STATUS,C
 	rlf	Lvals,F
 	goto	QMD61
 QMD63
 	movf	swrq,W
-	addlw	242
+	addlw	243
 	btfss	STATUS,Z	;_JG
 	btfss	STATUS,C
 	goto	_JG2
