@@ -915,15 +915,15 @@ SP4              EQU  H'0004'
      CONFIG     PWRT = ON           ; PWRT enabled
 ;     PWRT = OFF           PWRT disabled
 ;
-;   Brown-out Reset enable bit:
-      CONFIG     BOR = OFF           ; Brown-out Reset disabled
-;     BOR = ON             Brown-out Reset enabled
+;   Brown-out Reset enable bit:      ; EEPROM errata has BOR enabled as one workaround
+     ; CONFIG     BOR = OFF           ; Brown-out Reset disabled
+      CONFIG    BOR = ON             ;Brown-out Reset enabled
 ;
 ;   Brown-out Reset Voltage bits:
 ;     BORV = 45            VBOR set to 4.5V
 ;     BORV = 42            VBOR set to 4.2V
 ;     BORV = 27            VBOR set to 2.7V
-;     BORV = 20            VBOR set to 2.0V
+    CONFIG     BORV = 20          ;  VBOR set to 2.0V
 ;
 ;   Watchdog Timer Enable bit:
       CONFIG     WDT = OFF           ; WDT disabled (control is placed on the SWDTEN bit)
@@ -1253,6 +1253,8 @@ _eeadr                     ; set up EEDATA to contain desired data
         ;bsf     STATUS,RP0
         bsf     EECON1,RD,A
         ;bcf     STATUS,RP0
+        movf    EEDATA,W
+        movwf   _eedata
         return
 
 

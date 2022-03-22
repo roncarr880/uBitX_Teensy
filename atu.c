@@ -3,13 +3,13 @@
 /*
     Proposed commands on serial
   Z  -  Zero relays, keep current data.  Bypass mode.
-  X  -  Set Quick solution relays.  Max 3 on.
+  B  -  Set band, recall solution from eeprom
   O  -  On, apply relays
   S  -  Set relay data Cval Lval ( apply or wait for O command? )
   R  -  Report relay values  Cval Lval
   P  -  Report Fwd and Rev Power. Fwd, Rev, high and low bytes.
   W  -  Report sWr
-  T  -  Tune ( return a done value ? )
+  T  -  Tune ( return a done value  )
   C D   Inc or Dec Cval
   L M   Inc or Dec Lval
   H  -  Toggle Cap to Low Z or High Z side of L
@@ -35,7 +35,7 @@
 #define ADLEFT  0x00
 
 #define MATCH 10               /* antenna matched swr * 10 */
-#define QMATCH 13
+#define QMATCH 23              /* if too low, fine tune is skipped. too high waste time */
 
 /*   #pragma pic 504
      char stack[8];   not using this */
@@ -52,7 +52,7 @@ char Cvals;         /* straight data 7 bits, will need to be dispersed to the co
 char Lvals;
 char Hval;
 
-char QC;            /* the quick solution, use for RX for minimum relay current */
+char QC;            /* the quick solution working values */
 char QL;
 char QH;
 
@@ -89,16 +89,24 @@ char divql;
 char divqh;
 
 /*  make these common variable names global in access page, should result in less ram bank changes */
-char Ct,Lt,Ht;
-char swrq;
-char Cdv, Ldv;
+char Cdv, Ldv;               /* fine working values */
 char chg;
+char Cf,Lf,Hf;               /* fine solution */
+char swrf;
+char Cq, Lq, Hq;             /* quick solution */
+char swrq;
+char Cb, Lb, Hb;             /* best solution */
+char swrb;
 
-
+extern char EEdata[2*9+2] = {'B',0xff,0x03,0x38 };      /* Filler + 160 meter setting */
+char band;
 
 /*  statics and function args in page 1 */
 /* perhaps could just use access ram, have 128 locations. */
-#pragma pic 256
+/* #pragma pic 256 */
+
+
+
 
 main(){
 static char temp;
@@ -118,7 +126,7 @@ static char temp;
 
 /*********
   Z  -  Zero relays, keep current data.  Bypass mode.
-  X  -  Set Quick solution relays.  Max 3 on.
+  B  -  Set Band, recall saved data.
   O  -  On, apply relays
   S  -  Set relay data Cval Lval ( apply or wait for O command? )
   R  -  Report relay values  Cval Lval
@@ -134,18 +142,18 @@ static char temp;
    if( rx_in != rx_out ){           /* commands */
       temp = get_rx();
       switch( temp ){
-         case 'Z':  bypass();   break;      /* relays off, save current setting */
-         case 'X':  write_quick();  break;  /* quick solution on */
-         case 'O':  write_vals(); break;    /* relays on */
-         case 'S':  set_vals(); /*write_vals();*/  break;    /* new relay data from host */
-         case 'R':  report_vals(); break;   /* send relay settings to host */
-         case 'P':  report_power(); break;  /* report new FWD, REV readings */
+         case 'Z':  bypass();     break;      /* relays off, save current setting */
+         case 'B':  set_band();   break;      /* recall solution */
+         case 'O':  write_vals(); break;      /* relays on */
+         case 'S':  set_vals();   break;      /* new relay data from host */
+         case 'R':  report_vals(); break;     /* send relay settings to host */
+         case 'P':  report_power(); break;    /* report new FWD, REV readings */
          case 'T':  tune();     break;
-         case 'C':  ++Cvals;  /*write_vals();*/  break;
-         case 'D':  --Cvals;  /*write_vals();*/  break;
-         case 'L':  ++Lvals;  /*write_vals();*/  break;
-         case 'M':  --Lvals;  /*write_vals();*/  break;
-         case 'H':  Hval ^= B7; /*write_vals();*/  break;   /* toggle cap input or output side of L's */
+         case 'C':  ++Cvals;    break;
+         case 'D':  --Cvals;    break;
+         case 'L':  ++Lvals;    break;
+         case 'M':  --Lvals;    break;
+         case 'H':  Hval ^= B7;   break;      /* toggle cap input or output side of L's */
          case 'W':
             put_tx('W');
             put_tx(swr);     /* last value from tune, for dynamic values use P - current fwd and rev power */
@@ -170,12 +178,13 @@ static char h;
     Hval = h;
 }
 
-write_quick(){          /* set the quick solution value */
+/*******
+write_quick(){          /* set the quick solution value 
 static char tc;
 static char tl;
 static char h;
 
-    tc = Cvals;         /* save current settings */
+    tc = Cvals;         /* save current settings 
     tl = Lvals;
     h = Hval;
     Hval = QH;
@@ -186,6 +195,7 @@ static char h;
     Lvals = tl;
     Hval = h;
 }
+***********/
 
 set_vals(){            /* get new settings from host, wait to implement */
 
@@ -195,6 +205,14 @@ set_vals(){            /* get new settings from host, wait to implement */
    Lvals = get_rx();
    Hval = Cvals & B7;
    Cvals &= 0x7F;
+}
+
+set_band(){
+
+   while( rx_in == rx_out );
+   band = get_rx();
+   if( band < 10 ) recall_solution();     /* get relay data from eeprom, wait for 'O' command to implement */
+
 }
 
 report_vals(){
@@ -216,61 +234,85 @@ report_power(){
 
 tune(){
 
+   swrb = swrq = swrf = 240;
    tlow = thigh = 0;         /* timeout try counter */
    Qtune();
-   if( thigh >= 4 ){         /* timeout, no signal probably */
-      put_tx('T');
-      put_tx( swr );
-      return;
-   }
-   if( swr > MATCH ) Ftune();     /* fine tune from the best quick tune result */
+
+   /* one last fine tune if QMATCH is too low for this antenna, fine tune was skipped */
+   Cq = Cb;  Lq = Lb;  Hq = Hb;
+   if( swrb > MATCH+1 ) Ftune();
+
+   /* apply best */
+   Cvals = Cb;
+   Lvals = Lb;
+   Hval = Hb;
+   write_vals();
+   swr = swrb;  
+
+   /* eewrite causes software serial to send incorrect data, do this first */
+   if( swr > 9 && swr <= 13 ) save_solution();   /* save if reasonable */
+
    put_tx('T');
    put_tx(swr);
+
 
 }
 
 Qtune(){                 /* shift a bit across L and  C */
-/* char swrq;*/
-/* char Lt,Ct,Ht;  */
 
-   QC = Cvals = Ct = 0;
-   QL = Lvals = Lt = 0;
-   QH = Hval  = Ht = 0;
-   write_vals();              /* get a base reading of passthrough */
+      /* check if existing solution is ok */
+   Cb = Cvals;  Lb = Lvals; Hb = Hval;
+   write_vals();
+   get_swr();
+   Btest();
+   if( thigh >= 4 || swrb <= MATCH+1 ) return;     /* timeout or antenna matched ok with current relay settings */
+
+   Cb = Cq = Cvals = Cf = 0;
+   Lb = Lq = Lvals = Lf = 0;
+   Hb = Hq = Hval  = Hf = 0;
+   write_vals();                                /* get a base reading of passthrough */
    get_swr();
    swrq = swr;
-   if( thigh >= 4 || swr <= MATCH ) return;     /* timeout or antenna matched without tuner */
+   Btest();
+   if( thigh >= 4 || swrb <= MATCH+1 ) return;     /* timeout or antenna matched ok without tuner */
 
-   /* find the best two relay solution or three relay if High Z, takes 1 second */
-   for( Cvals = 1; Cvals < 128;  Cvals <<= 1 ){
-      for( Lvals = 1; Lvals < 128; Lvals <<= 1 ){
+   /* find the best two relay solution or three relay if High Z, possible 1 fine tune per C value with best L */
+   for( QC = 1; QC < 128;  QC <<= 1 ){
+      for( QL = 1; QL < 128; QL <<= 1 ){
          Hval = 0;               /* test low Z */
          Qtest();
          Hval = 128;             /* test high Z */
          Qtest();
       }
-      if( swrq <= QMATCH && Ct > 1 ) break;      /* avoid early exit for low Ct, Ht may be incorrect, HiZ LoZ */
-      if( thigh >= 4 || swrq <= MATCH ) break;   /* timeout or matched */
+      if( swrq <= QMATCH ) Ftune();              /* fine tune from a promising quick tune result */
+      if( thigh >= 4 || swrb <= MATCH ) break;   /* timeout or matched */
+      swrq = 240;                                /* reset for next loop */
    }      
 
-   /* apply best, save quick solution */
-   QC = Cvals = Ct;
-   QL = Lvals = Lt;
-   QH = Hval = Ht;
-   write_vals();
-   swr = swrq;  
 }
 
 
+Btest(){
+
+   if( swr < swrb ){
+      Lb = Lvals;
+      Cb = Cvals;
+      Hb = ( Cvals == 0 ) ? 0 : Hval;
+      swrb = swr;
+   }
+}
+
 Qtest(){
 
+   Cvals = QC;  Lvals = QL;
    write_vals();
    get_swr();
    if( swr < swrq ){       /* save best results so far */
-      Lt = Lvals;
-      Ct = Cvals;
-      Ht = Hval;
+      Lq = Lvals;
+      Cq = Cvals;
+      Hq = Hval;
       swrq = swr;
+      Btest();
    }
 }
 
@@ -279,17 +321,20 @@ Qtest(){
 Ftune(){
 static char dv;                 /* delta value */
 
-   Lt = Lvals;  Ct = Cvals;
-   Cdv = Ct >> 1;               /* start search next power of two down */
-   Ldv = Lt >> 1;
+   Lf = Lvals = Lq;  Cf = Cvals = Cq;  Hval = Hq;  /* tune from the quick tune result */
+   Cdv = Cq >> 1;
+   Ldv = Lq >> 1;
    dv = ( Ldv > Cdv ) ? Ldv : Cdv;
-   if( Cdv == 0 ) Cdv = 1;      /* set min adjustment values or nothing to do here */
+   if( Cdv == 0 ) Cdv = 1;              /* set min adjustment values or nothing to do here */
    if( Ldv == 0 ) Ldv = 1;
    if( dv == 0 ) dv = 1;
 
-   write_vals();                /* starting swr is known but get it again in case preceeding algorithm is changed */
+   write_vals();                        /* starting swr */
    get_swr();
-   swrq = swr;  
+   swrf = swr; 
+
+   Btest();
+   if( swrb <= MATCH ) return;
 
    while( dv ){
       chg = 0;
@@ -297,35 +342,30 @@ static char dv;                 /* delta value */
       /* try up L */
       Lvals += Ldv;
       if( Lvals < 128 ) FCLtest();
-      Lvals = Lt;
+      Lvals = Lf;
 
       /* try down C */
       Cvals -= Cdv;
       if( Cvals < 128 ) FCLtest();           /* unsigned math */
-      Cvals = Ct;
+      Cvals = Cf;
 
       /* try down L */
       Lvals -= Ldv;
       if( Lvals < 128 ) FCLtest();           /* unsigned math */
-      Lvals = Lt;
+      Lvals = Lf;
 
       /* try up C */
       Cvals += Cdv;
       if( Cvals < 128 ) FCLtest();
-      Cvals = Ct;
+      Cvals = Cf;
 
       if( chg == 0 ){
          dv >>= 1;
          if( dv < Cdv ) Cdv = dv;
          if( dv < Ldv ) Ldv = dv;
       }
-      if( thigh >= 4 || swrq <= MATCH ) break;
+      if( thigh >= 4 || swrb <= MATCH ) break;
    }
-
-   swr = swrq;                /* write best */
-   Cvals = Ct;
-   Lvals = Lt;
-   write_vals(); 
 
 }
 
@@ -334,11 +374,13 @@ FCLtest(){
 
    write_vals();
    get_swr();
-   if( swr < swrq ){
-      Ct = Cvals;
-      Lt = Lvals;
+   if( swr < swrf ){
+      Cf = Cvals;
+      Lf = Lvals;
+      Hf = Hval;
       ++chg;
-      swrq = swr;
+      swrf = swr;
+      Btest();
    }
 }
 
@@ -378,6 +420,7 @@ init(){
    rx_in = rx_out = tx_in = tx_out = 0;
    Hval = Cvals = Lvals = 0;
    rstate = tstate = 0;
+   band = 10;                          /* set to bogus value, eeprom should be 0xff here */
 
 
    /* start timer 2 and enable interrupt.   1200 baud at 8 mhz clock */
@@ -388,6 +431,7 @@ init(){
    T2CON = B0 + B2;          /* prescale by 4, on bit  B0 + B2 */
    interrupts();
    write_vals();             /* clear ports */
+   EECON1 = 0;
 
 }
 
@@ -830,6 +874,91 @@ static char over;
     }
 
     return over;
+}
+
+
+#asm
+_eewrite
+      
+     ; banksel EEADR
+      movwf   EEADR
+      movf    _eedata,W
+      movwf   EEDATA
+
+     ; banksel EECON1
+      bcf     EECON1,EEPGD
+      bsf     EECON1,WREN
+      bcf     INTCON,GIE           ; disable interrupts
+     ; btfsc   INTCON,GIE
+     ; goto    $-2
+
+      movlw   0x55      
+      movwf   EECON2
+      movlw   0xaa
+      movwf   EECON2
+      bsf     EECON1,WR
+
+      nop
+      nop
+      bsf     INTCON,GIE
+      nop
+      nop
+      btfsc   EECON1,WR
+      goto    $-2
+      bcf     EECON1,WREN
+
+      return      
+
+#endasm
+
+
+
+
+
+/*    restore and save to EEPROM */
+recall_solution(){
+static char adr;
+static char dat;
+
+    adr = band;
+    adr <<= 1;
+    adr += 3;                     /* address Lvals for this band */
+    dat = EEdata[adr];
+    if( dat == 0xff ) return;     /* no data stored, eeprom erased */
+    Lvals = dat;
+    --adr;
+    dat = EEdata[adr];
+    Hval = dat & 128;
+    Cvals = dat & 0x7f;  
+
+}
+
+
+save_solution(){              /* read current data in eeprom, save new data if different */
+static char adr;
+static char dat;
+static char dat2;
+
+   adr = band;
+   adr <<= 1;
+   ++adr; ++adr;
+
+   dat = EEdata[adr];
+   dat2 = Cvals + Hval;
+   if( dat != dat2 ){
+      _eedata = dat2;
+      adr = adr;                       /* load W reg with address */
+      _eewrite();
+   }
+
+   ++adr;
+   dat = EEdata[adr];
+   if( dat != Lvals ){
+      _eedata = Lvals;
+      adr = adr;
+      _eewrite();
+   }
+
 }
 
 
