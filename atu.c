@@ -98,8 +98,11 @@ char swrq;
 char Cb, Lb, Hb;             /* best solution */
 char swrb;
 
-extern char EEdata[2*9+2] = {'B',0xff,0x03,0x38 };      /* Filler + 160 meter setting */
-char band;
+                            /* saved tuning solutions, 10 per band, 20 for 10 meters. 2 eeprom locations per solution */
+                            /* EEdata extends to 200 but only initialized 20 locations */
+                            /* example: 160 meter setting, valid data at 1.8 and 1.9.  Cvals+Hval,Lvals */
+extern char EEdata[20] = {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x03,0x38,0x03,0x38 };
+char band;                  /* eeprom address to use, band + subband from host, one slot per 100khz */
 
 /*  statics and function args in page 1 */
 /* perhaps could just use access ram, have 128 locations. */
@@ -211,7 +214,7 @@ set_band(){
 
    while( rx_in == rx_out );
    band = get_rx();
-   if( band < 10 ) recall_solution();     /* get relay data from eeprom, wait for 'O' command to implement */
+   recall_solution();     /* get relay data from eeprom, wait for 'O' command to implement */
 
 }
 
@@ -233,6 +236,10 @@ report_power(){
 }
 
 tune(){
+
+   if( Cvals == 0x7f && Lvals == 0xff ){   /* current solution is from blank eeprom location */
+      Cvals = Hval = Lvals = 0;            /* set to passthrough */
+   }
 
    swrb = swrq = swrf = 240;
    tlow = thigh = 0;         /* timeout try counter */
@@ -530,6 +537,8 @@ static char temp;
 
 
 write_vals( ){     /* apply the relay settings */
+
+   if( Cvals == 0x7f && Lvals == 0xff ) return;    /* do not write data from unused eeprom location */
    
    #asm
    ;if( Cvals & 0x01 ) Pc |= B7;
@@ -846,7 +855,6 @@ divide_k( char constant ){      /* divide accumulator by a constant or char */
 }
 
 
-/* untested multiply routine */
 /* 8 by 16 bit multiply, unsigned, assume result fits in 16 bits, return overflow if not */
 /* 
    acch,accl has multiplicand, moved to argh,argl.
@@ -879,7 +887,7 @@ static char over;
 
 #asm
 _eewrite
-      
+     ; the example from data sheet not 100% correct, leaves bit 6 in eecon1 undefined, cleared eecon1 in init() to fix.
      ; banksel EEADR
       movwf   EEADR
       movf    _eedata,W
@@ -921,15 +929,12 @@ static char adr;
 static char dat;
 
     adr = band;
-    adr <<= 1;
-    adr += 3;                     /* address Lvals for this band */
-    dat = EEdata[adr];
-    if( dat == 0xff ) return;     /* no data stored, eeprom erased */
-    Lvals = dat;
-    --adr;
     dat = EEdata[adr];
     Hval = dat & 128;
     Cvals = dat & 0x7f;  
+    ++adr;
+    Lvals = EEdata[adr];
+    report_vals();
 
 }
 
@@ -939,9 +944,7 @@ static char adr;
 static char dat;
 static char dat2;
 
-   adr = band;
-   adr <<= 1;
-   ++adr; ++adr;
+   adr = band;                /* host now calculates the correct address, 2 * ( 10*band + subband ) */
 
    dat = EEdata[adr];
    dat2 = Cvals + Hval;

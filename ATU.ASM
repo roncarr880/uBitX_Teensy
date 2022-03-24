@@ -1598,21 +1598,35 @@ Lb	equ 60
 Hb	equ 61
 ; char swrb ; 
 swrb	equ 62
-; extern char EEdata [ 2 * 9 + 2 ] = { 'B' , 0xff , 0x03 , 0x38 } ; 
+; extern char EEdata [ 20 ] = { 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0xff , 0x03 , 0x38 , 0x03 , 0x38 } ; 
 
 
 
 
-	de 0,0,0,0,0,0,0,0,0,0
-	de 0,0,0,0,0,0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ; char band ; 
-band	equ 79
+band	equ 63
 ; main ( ) { 
 	;code
 main
 ; static char temp ; 
 	;data
-QMD2	equ 80
+QMD2	equ 64
 ; if ( rx_in != rx_out ) { 
 	;code
 	movf	rx_in,W
@@ -1747,11 +1761,11 @@ QMD3
 bypass
 ; static char tc ; 
 	;data
-QMD44	equ 81
+QMD44	equ 65
 ; static char tl ; 
-QMD45	equ 82
+QMD45	equ 66
 ; static char h ; 
-QMD46	equ 83
+QMD46	equ 67
 ; tc = Cvals ; 
 	;code
 	movf	Cvals,W
@@ -1832,16 +1846,11 @@ QMD52
 ; band = get_rx ( ) ; 
 	call	get_rx
 	movwf	band
-; if ( band < 10 ) recall_solution ( ) ; 
-	movf	band,W
-	addlw	246
-	btfsc	STATUS,C
-	goto	QMD53
+; recall_solution ( ) ; 
 	call	recall_solution
-; } 
-QMD53
 	return
-; } report_vals ( ) { 
+; } 
+; report_vals ( ) { 
 report_vals
 ; put_tx ( 'R' ) ; 
 	movlw	82
@@ -1879,7 +1888,23 @@ report_power
 ; } 
 ; tune ( ) { 
 tune
+; if ( Cvals == 0x7f && Lvals == 0xff ) { 
+	movf	Cvals,W
+	addlw	129
+	btfss	STATUS,Z
+	goto	QMD53
+	movf	Lvals,W
+	addlw	1
+	btfss	STATUS,Z
+	goto	QMD53
+; Cvals = Hval = Lvals = 0 ; 
+	movlw	0
+	movwf	Lvals
+	movwf	Hval
+	movwf	Cvals
+; } 
 ; swrb = swrq = swrf = 240 ; 
+QMD53
 	movlw	240
 	movwf	swrf
 	movwf	swrq
@@ -2156,7 +2181,7 @@ QMD72
 Ftune
 ; static char dv ; 
 	;data
-QMD73	equ 84
+QMD73	equ 68
 ; Lf = Lvals = Lq ; Cf = Cvals = Cq ; Hval = Hq ; 
 	;code
 	movf	Lq,W
@@ -2385,7 +2410,7 @@ QMD91
 	return
 ; } put_tx ( char val ) { 
 	;data
-_put_tx	equ	85
+_put_tx	equ	69
 	;code
 put_tx
 	banksel	_put_tx
@@ -2406,7 +2431,7 @@ put_tx
 get_rx
 ; static char temp ; 
 	;data
-QMD92	equ 86
+QMD92	equ 70
 ; temp = rx_buf [ rx_out ++ ] ; 
 	;code
 	movf	rx_out,W
@@ -2488,21 +2513,21 @@ init
 _interrupt
 ; static char rdat ; 
 	;data
-QMD93	equ 87
+QMD93	equ 71
 ; static char rmod ; 
-QMD94	equ 88
+QMD94	equ 72
 ; static char rbit ; 
-QMD95	equ 89
+QMD95	equ 73
 ; static char fsr0 ; 
-QMD96	equ 90
+QMD96	equ 74
 ; static char tdat ; 
-QMD97	equ 91
+QMD97	equ 75
 ; static char tmod ; 
-QMD98	equ 92
+QMD98	equ 76
 ; static char tbit ; 
-QMD99	equ 93
+QMD99	equ 77
 ; static char temp ; 
-QMD100	equ 94
+QMD100	equ 78
 ; fsr0 = FSR0L ; 
 	;code
 	movf	FSR0L,W
@@ -2749,7 +2774,18 @@ QMD138
 	retfie
 ; } write_vals ( ) { 
 write_vals
+; if ( Cvals == 0x7f && Lvals == 0xff ) return ; 
+	movf	Cvals,W
+	addlw	129
+	btfss	STATUS,Z
+	goto	QMD139
+	movf	Lvals,W
+	addlw	1
+	btfss	STATUS,Z
+	goto	QMD139
+	return
 ; # asm 
+QMD139
    ;if( Cvals & 0x01 ) Pc |= B7;
       btfsc Cvals,0
       bsf   LATC,7
@@ -2826,7 +2862,7 @@ write_vals
       bsf   LATA,4
       btfss Lvals,6
       bcf   LATA,4
-QMD139
+QMD140
 ; delay ( 10 ) ; 
 	movlw	10
 	call	delay
@@ -2834,7 +2870,7 @@ QMD139
 ; } 
 ; delay ( char tm ) { 
 	;data
-_delay	equ	95
+_delay	equ	79
 	;code
 delay
 	banksel	_delay
@@ -2848,12 +2884,12 @@ delay
 	movf	_delay,W
 	movwf	rtimer
 ; while ( rtimer ) ; 
-QMD140
+QMD141
 	movf	rtimer,W
 	btfsc	STATUS,Z
+	goto	QMD142
 	goto	QMD141
-	goto	QMD140
-QMD141
+QMD142
 	return
 ; } 
 ; interrupts ( ) { 
@@ -2861,7 +2897,7 @@ interrupts
 ; # asm 
       bsf   INTCON,GIE
       bsf   INTCON,PEIE   ;  need for tmr2 ? : yes  
-QMD142
+QMD143
 	return
 ; } no_interrupts ( ) { 
 no_interrupts
@@ -2869,18 +2905,18 @@ no_interrupts
       bcf   INTCON,GIE
       btfsc INTCON,GIE    ;see AN576.  What devices have this issue?
       goto $-2
-QMD143
+QMD144
 	return
 ; } ad_sample ( char just ) { 
 	;data
-_ad_sample	equ	96
+_ad_sample	equ	80
 	;code
 ad_sample
 	banksel	_ad_sample
 	movwf	_ad_sample
 ; static char i ; 
 	;data
-QMD144	equ 97
+QMD145	equ 81
 ; ADCON2 = just + 0x25 ; 
 	;code
 	BANKSEL	_ad_sample
@@ -2892,27 +2928,27 @@ QMD144	equ 97
 	movwf	ADCON0
 ; for ( i = 0 ; i < 5 ; ++ i ) ; 
 	movlw	0
-	movwf	QMD144
-QMD145
-	movf	QMD144,W
+	movwf	QMD145
+QMD146
+	movf	QMD145,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD147
-QMD146
-; ++ i )  # asm 
-	incf	QMD144,F
-	goto	QMD145
+	goto	QMD148
 QMD147
-    bsf ADCON0,1
+; ++ i )  # asm 
+	incf	QMD145,F
+	goto	QMD146
 QMD148
-; while ( ADCON0 & 0x02  ) ; 
+    bsf ADCON0,1
 QMD149
+; while ( ADCON0 & 0x02  ) ; 
+QMD150
 	movf	ADCON0,W
 	andlw	2
 	btfsc	STATUS,Z
+	goto	QMD151
 	goto	QMD150
-	goto	QMD149
-QMD150
+QMD151
 ; acch = ADRESH ; 
 	movf	ADRESH,W
 	movwf	acch
@@ -2921,27 +2957,27 @@ QMD150
 	movwf	accl
 ; for ( i = 0 ; i < 5 ; ++ i ) ; 
 	movlw	0
-	movwf	QMD144
-QMD151
-	movf	QMD144,W
+	movwf	QMD145
+QMD152
+	movf	QMD145,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD153
-QMD152
-; ++ i )  # asm 
-	incf	QMD144,F
-	goto	QMD151
+	goto	QMD154
 QMD153
-    bsf ADCON0,1
+; ++ i )  # asm 
+	incf	QMD145,F
+	goto	QMD152
 QMD154
-; while ( ADCON0 & 0x02  ) ; 
+    bsf ADCON0,1
 QMD155
+; while ( ADCON0 & 0x02  ) ; 
+QMD156
 	movf	ADCON0,W
 	andlw	2
 	btfsc	STATUS,Z
+	goto	QMD157
 	goto	QMD156
-	goto	QMD155
-QMD156
+QMD157
 ; argh = ADRESH ; 
 	movf	ADRESH,W
 	movwf	argh
@@ -2963,27 +2999,27 @@ QMD156
 	movwf	ADCON0
 ; for ( i = 0 ; i < 5 ; ++ i ) ; 
 	movlw	0
-	movwf	QMD144
-QMD157
-	movf	QMD144,W
+	movwf	QMD145
+QMD158
+	movf	QMD145,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD159
-QMD158
-; ++ i )  # asm 
-	incf	QMD144,F
-	goto	QMD157
+	goto	QMD160
 QMD159
-    bsf ADCON0,1
+; ++ i )  # asm 
+	incf	QMD145,F
+	goto	QMD158
 QMD160
-; while ( ADCON0 & 0x02  ) ; 
+    bsf ADCON0,1
 QMD161
+; while ( ADCON0 & 0x02  ) ; 
+QMD162
 	movf	ADCON0,W
 	andlw	2
 	btfsc	STATUS,Z
+	goto	QMD163
 	goto	QMD162
-	goto	QMD161
-QMD162
+QMD163
 ; acch = ADRESH ; 
 	movf	ADRESH,W
 	movwf	acch
@@ -2992,27 +3028,27 @@ QMD162
 	movwf	accl
 ; for ( i = 0 ; i < 5 ; ++ i ) ; 
 	movlw	0
-	movwf	QMD144
-QMD163
-	movf	QMD144,W
+	movwf	QMD145
+QMD164
+	movf	QMD145,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD165
-QMD164
-; ++ i )  # asm 
-	incf	QMD144,F
-	goto	QMD163
+	goto	QMD166
 QMD165
-    bsf ADCON0,1
+; ++ i )  # asm 
+	incf	QMD145,F
+	goto	QMD164
 QMD166
-; while ( ADCON0 & 0x02  ) ; 
+    bsf ADCON0,1
 QMD167
+; while ( ADCON0 & 0x02  ) ; 
+QMD168
 	movf	ADCON0,W
 	andlw	2
 	btfsc	STATUS,Z
+	goto	QMD169
 	goto	QMD168
-	goto	QMD167
-QMD168
+QMD169
 ; argh = ADRESH ; 
 	movf	ADRESH,W
 	movwf	argh
@@ -3035,54 +3071,54 @@ QMD168
 get_swr
 ; static char fwd ; 
 	;data
-QMD169	equ 98
+QMD170	equ 82
 ; fwd = 0 ; 
 	;code
 ;movlw	0
-	clrf 	QMD169
+	clrf 	QMD170
 ; while ( fwd < 5 ) { 
-QMD170
-	movf	QMD169,W
+QMD171
+	movf	QMD170,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD171
+	goto	QMD172
 ; if ( ++ tlow == 0 ) ++ thigh ; 
 	incf	tlow,F
 	movf	tlow,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD172
+	goto	QMD173
 	incf	thigh,F
 ; ad_sample ( 0x80  ) ; 
-QMD172
+QMD173
 	movlw	128
 	call	ad_sample
 ; if ( fwdh == 0 ) fwd = fwdl ; 
 	movf	fwdh,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD173
-	movf	fwdl,W
-	movwf	QMD169
-; else fwd = 99 ; 
 	goto	QMD174
-QMD173
-	movlw	99
-	movwf	QMD169
+	movf	fwdl,W
+	movwf	QMD170
+; else fwd = 99 ; 
+	goto	QMD175
 QMD174
+	movlw	99
+	movwf	QMD170
+QMD175
 ; if ( fwd < 5 ) delay ( 10 ) ; 
-	movf	QMD169,W
+	movf	QMD170,W
 	addlw	251
 	btfsc	STATUS,C
-	goto	QMD175
+	goto	QMD176
 	movlw	10
 	call	delay
 ; if ( thigh >= 4 ) { 
-QMD175
+QMD176
 	movf	thigh,W
 	addlw	252
 	btfss	STATUS,C
-	goto	QMD176
+	goto	QMD177
 ; swr = 253 ; 
 	movlw	253
 	movwf	swr
@@ -3090,10 +3126,10 @@ QMD175
 	return
 ; } 
 ; } 
-QMD176
+QMD177
 ; } acch = fwdh ; accl = fwdl ; 
-	goto	QMD170
-QMD171
+	goto	QMD171
+QMD172
 	movf	fwdh,W
 	movwf	acch
 	movf	fwdl,W
@@ -3127,7 +3163,7 @@ QMD171
 	call	dsub
 	iorlw	0
 	btfsc	STATUS,Z
-	goto	QMD177
+	goto	QMD178
 ; swr = 250 ; 
 	movlw	250
 	movwf	swr
@@ -3135,7 +3171,7 @@ QMD171
 	return
 ; } 
 ; argh = acch ; argl = accl ; 
-QMD177
+QMD178
 	movf	acch,W
 	movwf	argh
 	movf	accl,W
@@ -3144,11 +3180,11 @@ QMD177
 	movf	argh,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD178
+	goto	QMD179
 	movf	argl,W
 ;addlw	256
 	btfss	STATUS,Z
-	goto	QMD178
+	goto	QMD179
 ; swr = 251 ; 
 	movlw	251
 	movwf	swr
@@ -3156,12 +3192,12 @@ QMD177
 	return
 ; } 
 ; divide ( ) ; 
-QMD178
+QMD179
 	call	divide
 ; if ( divqh ) { 
 	movf	divqh,W
 	btfsc	STATUS,Z
-	goto	QMD179
+	goto	QMD180
 ; swr = 252 ; 
 	movlw	252
 	movwf	swr
@@ -3169,7 +3205,7 @@ QMD178
 	return
 ; } 
 ; swr = divql ; 
-QMD179
+QMD180
 	movf	divql,W
 	movwf	swr
 	return
@@ -3206,35 +3242,35 @@ dadd
       btfsc   STATUS,C
       incf    overflow,F        ; merge in if had an overflow here
 
-QMD180
+QMD181
 ; return overflow ; 
 	movf	overflow,W
 	return
 ; } 
 ; right_shift ( char count ) { 
 	;data
-_right_shift	equ	99
+_right_shift	equ	83
 	;code
 right_shift
 	banksel	_right_shift
 	movwf	_right_shift
 ; while ( count -- ) { 
-QMD181
+QMD182
 	BANKSEL	_right_shift
 	movf	_right_shift,W
 	decf	_right_shift,F
 	iorlw	0
 	btfsc	STATUS,Z
-	goto	QMD182
+	goto	QMD183
 ; # asm 
         banksel  acch
         bcf   STATUS,C      ; logical shift right double
         rrf   acch,F
         rrf   accl,F
-QMD183
+QMD184
 ; } } 
-	goto	QMD181
-QMD182
+	goto	QMD182
+QMD183
 	return
 ; char dsub ( ) { 
 dsub
@@ -3261,7 +3297,7 @@ dsub
       btfss   STATUS,C
       incf    overflow,F        ; merge in if had a borrow here
 
-QMD184
+QMD185
 ; return overflow ; 
 	movf	overflow,W
 	return
@@ -3273,40 +3309,40 @@ divide
 ; for ( divi = 0 ; divi < 16 ; ++ divi ) { 
 	movlw	0
 	movwf	divi
-QMD185
+QMD186
 	movf	divi,W
 	addlw	240
 	btfsc	STATUS,C
-	goto	QMD187
+	goto	QMD188
 ; # asm 
         bcf   STATUS,C
         rlf   divql,F        ; banksel ok here, same as divi
         rlf   divqh,F
         rlf   accl,F
         rlf   acch,F
-QMD188
+QMD189
 ; if ( dsub ( ) ) dadd ( ) ; 
 	call	dsub
 	iorlw	0
 	btfsc	STATUS,Z
-	goto	QMD189
+	goto	QMD190
 	call	dadd
 ; else divql |= 1 ; 
-	goto	QMD190
-QMD189
+	goto	QMD191
+QMD190
 	movlw	1
 	iorwf	divql,F
-QMD190
+QMD191
 ; } 
-QMD186
+QMD187
 ; ++ divi )  } 
 	incf	divi,F
-	goto	QMD185
-QMD187
+	goto	QMD186
+QMD188
 	return
 ; divide_k ( char constant ) { 
 	;data
-_divide_k	equ	100
+_divide_k	equ	84
 	;code
 divide_k
 	banksel	_divide_k
@@ -3332,18 +3368,18 @@ divide_k
 ; } 
 ; char multiply ( char multi ) { 
 	;data
-_multiply	equ	101
+_multiply	equ	85
 	;code
 multiply
 	banksel	_multiply
 	movwf	_multiply
 ; static char over ; 
 	;data
-QMD191	equ 102
+QMD192	equ 86
 ; over = 0 ; 
 	;code
 ;movlw	0
-	clrf 	QMD191
+	clrf 	QMD192
 ; divi = multi ; 
 	BANKSEL	_multiply
 	movf	_multiply,W
@@ -3357,19 +3393,19 @@ QMD191	equ 102
 ; zacc ( ) ; 
 	call	zacc
 ; while ( divi ) { 
-QMD192
+QMD193
 	movf	divi,W
 	btfsc	STATUS,Z
-	goto	QMD193
+	goto	QMD194
 ; if ( divi & 1 ) over |= dadd ( ) ; 
 	movf	divi,W
 	andlw	1
 	btfsc	STATUS,Z
-	goto	QMD194
+	goto	QMD195
 	call	dadd
-	iorwf	QMD191,F
+	iorwf	QMD192,F
 ; divi >>= 1 ; 
-QMD194
+QMD195
 	bcf	STATUS,C
 	rrf	divi,F
 ; # asm 
@@ -3377,16 +3413,16 @@ QMD194
           bcf  STATUS,C
           rlf  argl,F
           rlf  argh,F
-QMD195
+QMD196
 ; } return over ; 
-	goto	QMD192
-QMD193
-	movf	QMD191,W
+	goto	QMD193
+QMD194
+	movf	QMD192,W
 	return
 ; } 
 ; # asm 
 _eewrite
-      
+     ; the example from data sheet not 100% correct, leaves bit 6 in eecon1 undefined, cleared eecon1 in init() to fix.
      ; banksel EEADR
       movwf   EEADR
       movf    _eedata,W
@@ -3416,77 +3452,57 @@ _eewrite
 
       return      
 
-QMD196
+QMD197
 ; recall_solution ( ) { 
 recall_solution
 ; static char adr ; 
 	;data
-QMD197	equ 103
+QMD198	equ 87
 ; static char dat ; 
-QMD198	equ 104
+QMD199	equ 88
 ; adr = band ; 
 	;code
 	movf	band,W
-	movwf	QMD197
-; adr <<= 1 ; 
-	bcf	STATUS,C
-	rlf	QMD197,F
-; adr += 3 ; 
-	movlw	3
-	addwf	QMD197,F
+	movwf	QMD198
 ; dat = EEdata [ adr ] ; 
-	movf	QMD197,W
+	movf	QMD198,W
 	addlw	0
 	call	_eeadr
 	movf	_eedata,W
-	movwf	QMD198
-; if ( dat == 0xff ) return ; 
-	movf	QMD198,W
-	addlw	1
-	btfss	STATUS,Z
-	goto	QMD199
-	return
-; Lvals = dat ; 
-QMD199
-	movf	QMD198,W
-	movwf	Lvals
-; -- adr ; 
-	decf	QMD197,F
-; dat = EEdata [ adr ] ; 
-	movf	QMD197,W
-	addlw	0
-	call	_eeadr
-	movf	_eedata,W
-	movwf	QMD198
+	movwf	QMD199
 ; Hval = dat & 128 ; 
-	movf	QMD198,W
+	movf	QMD199,W
 	andlw	128
 	movwf	Hval
 ; Cvals = dat & 0x7f ; 
-	movf	QMD198,W
+	movf	QMD199,W
 	andlw	127
 	movwf	Cvals
+; ++ adr ; 
+	incf	QMD198,F
+; Lvals = EEdata [ adr ] ; 
+	movf	QMD198,W
+	addlw	0
+	call	_eeadr
+	movf	_eedata,W
+	movwf	Lvals
+; report_vals ( ) ; 
+	call	report_vals
 	return
 ; } 
 ; save_solution ( ) { 
 save_solution
 ; static char adr ; 
 	;data
-QMD200	equ 105
+QMD200	equ 89
 ; static char dat ; 
-QMD201	equ 106
+QMD201	equ 90
 ; static char dat2 ; 
-QMD202	equ 107
+QMD202	equ 91
 ; adr = band ; 
 	;code
 	movf	band,W
 	movwf	QMD200
-; adr <<= 1 ; 
-	bcf	STATUS,C
-	rlf	QMD200,F
-; ++ adr ; ++ adr ; 
-	incf	QMD200,F
-	incf	QMD200,F
 ; dat = EEdata [ adr ] ; 
 	movf	QMD200,W
 	addlw	0
@@ -3542,6 +3558,14 @@ QMD203
 QMD204
 	return
 	org	0xf00000	;eeprom data for 18F series
-	de	66,255
+	de	255,255
+	de	255,255
+	de	255,255
+	de	255,255
+	de	255,255
+	de	255,255
+	de	255,255
+	de	255,255
+	de	3,56
 	de	3,56
 	end
