@@ -128,6 +128,10 @@
  *      Re-wired two connections to free up Teensy pins 0 and 1 for the ATU serial port. Used pins A6 and A7. 
  *        Added a connector for the ATU with connections, NC +5 Gnd Rx Tx to go to the ATU Pickit connector vpp +5 gnd data clock.
  *        Added a 1000uf cap +5 to Gnd under the Teensy 3.1.
+ *      ATU working.  Saving tuning solutions in eeprom, 10 per band on 100khz steps. 
+ *        (Data sheet example eeprom write code fails to clear bit 6 in eecon1 register.)
+ *        (Enabled brown out on PIC18F2220 as another step in trying to get the eeprom writes to work. Part errata workaround.)
+ *        Displaying the atu relay data on the screen.
  *      
  *  To do.
  *      Review power levels again.  I twiddled the MIC gain pot a bit to make sure it was in a linear range.
@@ -632,7 +636,8 @@ void setup() {
 
     AudioInterrupts();
 
-    ATU.write('S'); ATU.write(0); ATU.write(0); ATU.write('Z');
+    ATU.write('Z');
+    // atu_band();     done from vfo_freq_disp
 
 }
 
@@ -680,34 +685,56 @@ int t2;
 
 
 void atu_response(){                     // do something with the data returned by the ATU
-static uint8_t st;
-static char cmd;
-uint8_t  c;
+static int st;
+static uint8_t cmd[8];
 
-   c = ATU.read();
-
-   if( st == 0 ){
-      cmd = c;
-      switch( cmd ){
-          case 'R':   st = 2;  break;
-      }
-      Serial.write( cmd ); Serial.write(' ');
-      tft.setTextSize(2);
-      tft.setCursor(10,210);
-      tft.write( cmd ); tft.write(' ');
+   cmd[st++] = ATU.read();
+   if( st == 8 ){                       // unknown command, out of sync
+      st = 0;
+      return;
    }
-   else{
-      --st;                                // !!! mostly. debug just print the results on serial
-      tft.setTextSize(2);
-      tft.setCursor(160-120*st,210);
-      tft.print(c,BIN);
-      Serial.print( c, BIN );
-      Serial.write(' ');
-      if( st == 0 ) Serial.println();
+
+   switch( cmd[0] ){
+      case 'R':                         // tuning solution
+         if( st == 3 ){
+            disp_tune(cmd);
+            st = 0;
+         }
+      break;
+      case 'P':                         // fwd and rev power
+         if( st == 5 ){
+
+            st = 0;
+         }
+      break;
+      default:   st = 0;  break;        // invalid command from the atu
    }
 }
 
 
+void disp_tune( uint8_t * p ){
+static unsigned int count;
+
+   if( ++count == 1 ) return;             // inhibit 1st time on power on, power on message stays on the screen
+   tft.setTextSize(2);
+   tft.setCursor(10,210);
+   if( p[2] == 0xff ) tft.setTextColor(EGA[12],0);
+   else tft.setTextColor(EGA[10],0);
+   tft.write( p[0] ); tft.write(' ');
+   print_bin( p[1] ); tft.write(' '); tft.write(' ');   // print binary with leading zero's
+   print_bin( p[2] );
+  
+}
+
+// tft print binary with leading zero's
+void print_bin( uint8_t val ){
+int i;
+
+   for( i = 128; i > 0; i >>= 1 ){
+      if( val & i ) tft.write('1');
+      else tft.write('0');
+   }
+}
 
 
 #define AGC_FLOOR  0.20             // 0.15 0.05
@@ -880,6 +907,8 @@ int val;
    if( vfo_mode & VFO_AM ) val = 6;
    if( vfo_mode & VFO_DIGI ) val = 7;
    mode_menu_data.current = val;
+
+   atu_band();
    
 }
 
@@ -1536,6 +1565,30 @@ uint32_t va, vb;
 }
 
 
+  // update the atu eeprom address in use, 10 slots per band/mhz, 1 slot is 100khz wide. 80 meters will use 5 slots of 10 allocated
+  // 40 meters will use 3 of 10, 30 meters will use 1 of 10, etc.
+void atu_band(){
+static uint32_t current;
+uint32_t adr;
+uint32_t t;
+
+   // what should the current address be  2*( 10*band + subband );
+   adr = band;
+   if( vfo_b >= 29000000 ) ++adr;      // two bands for 10 meters
+   adr *= 10;
+   t = vfo_b / 100000;                 // get the 100k sub band
+   t = t % 10;
+   adr += t;
+   adr *= 2;
+
+   if( current != adr ){
+      ATU.write('B');
+      ATU.write(adr);
+      current = adr;
+   } 
+}
+
+
 /***************      display freq of vfo's in a simulated 7 segment font   *****************************/
 void vfo_freq_disp(){
 //int val;
@@ -1580,6 +1633,9 @@ char bp;
    //tft.write(bp);
 
 
+   atu_band();
+
+   
     // standard font freq display
 //   tft.setTextSize(3);
 //   tft.setCursor(50,20);
