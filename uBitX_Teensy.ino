@@ -673,6 +673,7 @@ int t2;
       if( vfo_mode & VFO_CW ) keyer();
       if( tuning ) tune();                  // Antenna tuning
       if( transmitting ) tx_rx_seq();       // 48 ms delays for TX RX switching
+      if( tuning == 0 && transmitting > 48 ) read_atu_pwr();    // send a power command to the ATU, process with atu_response
      // test_1st_IF();                        // find the center of the 45mhz filter. Seems 45k about right.
    }
 
@@ -681,6 +682,14 @@ int t2;
    if( screen_owner == DECODE ) info_corner();
    if( tuning == 0 && ATU.available() ) atu_response();
    
+}
+
+void read_atu_pwr(){       // called once per ms, send commands to the ATU when transmitting
+static int tm;
+
+    if( ++tm < 120 ) return;      // 1200 baud at 60 bits ==> lowest number here would be 50 and that would max out the 1200 baud link.
+    ATU.write('P');               // send the get power command, atu_response will process the return information
+    tm = 0;
 }
 
 
@@ -703,14 +712,29 @@ static uint8_t cmd[8];
       break;
       case 'P':                         // fwd and rev power
          if( st == 5 ){
-
+            tx_fwd_rev(cmd);
             st = 0;
          }
       break;
-      default:   st = 0;  break;        // invalid command from the atu
+      default:   st = 0;  break;        // invalid command response from the atu
    }
 }
 
+// display fwd and rev power on the s-meter.  Scale rev power as if fwd was full scale to get swr reading.
+void tx_fwd_rev( uint8_t *p ){
+int fwd, rev;
+float ffwd, frev;
+
+   fwd = p[1] * 256 + p[2];
+   rev = p[3] * 256 + p[4];
+   fwd = map(fwd,0,800,0,1000);      // !!! need correct conversion factor for the swr bridge
+   ffwd = (float)fwd/1000.0;
+   rev = map(rev,0,800,0,1000);
+   frev = (float)rev/1000.0;
+   frev = frev/ffwd;
+   sig_pwr_meter(ffwd, frev);
+  
+}
 
 void disp_tune( uint8_t * p ){
 static unsigned int count;
@@ -791,9 +815,6 @@ uint8_t c;
     switch( tuning ){
         case  2:
            tx();
-          // ATU.write('T');                // !!! may want to have a tuner disabled state
-         // ATU.write('O');
-         // ATU.write('P');            // !!! get idle reading with current solution enabled
            c1 = 0;
            t_swr = 0;                         // 0.0 for when no tuner installed
         break;
@@ -801,16 +822,15 @@ uint8_t c;
           // si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 )); handled in tx sequencer
            SideTone.frequency(1500);
            SideTone.amplitude(0.99);
-           TX_SEL.gain(0,0.25);                     // set mic level pot on 17 meters, 15m - 10m will be lower than other bands
-           //if( band <= 3 ) TX_SEL.gain(0,0.90);      // !!! more power for 40 meters and under
-           //TX_SEL.gain(0,(float)side_vol/100.0);    // !!! testing only, side_vol is the audio sidetone during CW tx
+           TX_SEL.gain(0,0.25);               // mic level pot was set on 17 meters, 15m - 10m will be lower than other bands
+           ATU.write('T');
         break;
-     case 100:    // debug get some info from the ATU
-        ATU.write('P');     // get fwd rev for passthrough
-        ATU.write('O');     // enable current solution
-        ATU.write('P');     // get fwd rev for current solution
-        ATU.write('T');     // start tune late !!!
-     break;
+     //case 100:    // debug get some info from the ATU.
+       // ATU.write('P');     // get fwd rev for passthrough
+       // ATU.write('O');     // enable current solution
+       // ATU.write('P');     // get fwd rev for current solution
+       // ATU.write('T');       // start tune later 
+     //break;
         case TUNE_OFF:                        // timeout at nn seconds
            tuning = 0;
            rx();
@@ -820,14 +840,14 @@ uint8_t c;
                 c = ATU.read();
                 if( c1 == 0 && c == 'T' ) c1 = c;
                 else if( c1 == 'T' )  t_swr = c, tuning = -5;         // atu done, returned 'T swr' response
-                Serial.print(c,HEX);   // !!! just debug
-                Serial.write(' ');
+              //  Serial.print(c,HEX);   // just debug prints
+              //  Serial.write(' ');
              }
         break;
     }
 
     if( tuning < 0 ){
-       Serial.println();
+       //Serial.println();
        ATU.write('R');                // get solution
     }
   
@@ -880,9 +900,9 @@ static int mod;
 
     val2 = map( val2,0.0,1.0,1.0,10.0 );               // log scale on meter, convert 0.0 - 1.0 to a value where the log
     val2 = log10(val2);                                //  has a range of 0.0 - 1.0  ( log of 1 is zero, log of 10 is 1.0 )
-    sig_pwr_meter( val2 );
-}
-
+    if( transmitting == 0 ) sig_pwr_meter( val2,0.0 ); // is this correct? or should a straight value be plotted and the
+}                                                      // meter markings provide the log function.  Doing log here does expand lower
+                                                       // signals to cover more of the meter.
 
 void band_change( int to_band ){
 int val;
@@ -1159,7 +1179,7 @@ void menu_cleanup(){
    vfo_freq_disp();
    mf_bar_disp();
    set_volume( volume_ );
-   sig_pwr_meter( -1.0 );           // reset meter to zero
+   sig_pwr_meter( -1.0, 0.0 );           // reset meter to zero
 }
 
 // a mf bar on the left side of the screen grew into a full Smeter display
@@ -1209,10 +1229,13 @@ uint16_t c;
 
 // non-log meter unless convert the value before calling,  value is 0 to 1.0 for zero to full scale. 
 // on rx, more of an indication of the input to the A/D converter than S signal value
-void sig_pwr_meter( float val ){                // move the indicator bar around with a sprite
+void sig_pwr_meter( float val, float rval ){        // move the indicator bar around with a sprite
 int sx = 40;
+int sxr = 59;
 const int sy = 131;                                    // zero position
+const int syr = 150;
 static int pos;                                        // current x position
+static int posr;
 static int mod;                                        // slow down the fall of the meter
 //uint8_t sprite[] = { 0,0,0xaa,0xa0,0xaa,0xa0,0,0 };
 //uint8_t sprite[] = { 0,0,0,0x0a,0xaa,0xa0,0x0a,0xaa,0xa0,0x0a,0xaa,0xa0,0,0,0 };
@@ -1223,16 +1246,20 @@ const uint8_t spritey[] = { 0x00,0xe0,0xe0,0xe0,0xe0,0xe0,0xe0,0xe0,0x00 };
 const uint8_t spriter[] = { 0x00,0xc0,0xc0,0xc0,0xc0,0xc0,0xc0,0xc0,0x00 };
 int x,y;
 const int xm = 170;                      // x value scaling factor
+const int xmr = 135;                     // swr scaling factor
 int r;                                   // flag if nothing to do
 int i;                                   // loop 3 times for faster response on signal increases
+int n;                                   // loop 6 times when transmitting
 
     if( val < 0.0 ){                     // reset on menu exit
-        pos = 0;
+        posr = pos = 0;
         return;
     }
+    n = ( transmitting) ? 6 : 3;
+    //rval = 1.0;  //  debug
 
-    if( dis_info == 0 ) sx += 34;        // 34 == difference between centered meter and meter on left side
-    for( i = 0; i < 3; ++i ){
+    if( dis_info == 0 ) sx += 34, sxr += 34;    // 34 == difference between centered meter and meter on left side
+    for( i = 0; i < n; ++i ){
        // where should the indicator be.  Move one pixel at a time.
        r = 1;
        x = xm * val;
@@ -1240,7 +1267,7 @@ int i;                                   // loop 3 times for faster response on 
        else if( x < pos ){
           if( ++mod == 3 ) mod = 0, --pos, r = 0;
        }
-       if( r ) return;                      // no change in indicator position
+       if( r && transmitting == 0 ) return;     // no change in rx indicator position
     
        x = pos;
     
@@ -1255,7 +1282,19 @@ int i;                                   // loop 3 times for faster response on 
        if( pos > 0.85*xm ) tft.writeRect4BPP( sx+x, sy+y, 2, 9, spriter, EGA );          // red
        else if( pos > 0.75*xm ) tft.writeRect4BPP( sx+x, sy+y, 2, 9, spritey, EGA );     // yellow
        else tft.writeRect4BPP( sx+x, sy+y, 2, 9, spriteg, EGA );      // 4BPP, 2 pixels per byte.  0xa0 has one green pixel, one black pixel
-    }                                                                 // with colors from the EGA pallett.
+                                                                     // with colors from the EGA pallett.
+
+       // repeat for the swr indication
+       x = xmr * rval;
+       if( x > posr ) ++posr;
+       else if( x < posr && mod == 0 ) --posr;
+       x = posr;
+       th = -0.785 + 0.785 * (float(x)/(float)(xmr/2));         // -45 to +45 degrees
+       th = cos(th) - cos( 0.785 );                             // amount to raise the curve
+       y = -30.0 * th;                                          // pixel fudge factor
+       tft.writeRect4BPP( sxr+x, syr+y, 2, 9, spriter, EGA ); 
+       
+    }
 
 }
 
@@ -2207,6 +2246,7 @@ void tx_rx_seq(){
            if( (vfo_mode & VFO_CW) && tuning == 0 ) si5351bx_setfreq( 2, vfo_b - 600 );
            else si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ) );
            mf_bar_disp();            // Smeter area in RED as transmitter on indication
+           sig_pwr_meter( -1.0, 0.0 );   // zero meters
         }
      }
      else{                           // TX to RX
@@ -2214,6 +2254,7 @@ void tx_rx_seq(){
            if( vfo_mode & VFO_B ) si5351bx_setfreq( 2, vfo_b + IF + ( clari - 50 ));
            else si5351bx_setfreq( 2, vfo_a + IF + ( clari - 50 ) );
            mf_bar_disp();            // Smeter area in muted red
+           sig_pwr_meter( -1.0, 0.0 );
         }
      } 
 }
